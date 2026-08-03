@@ -26,6 +26,14 @@ compose_file: docker-compose.prod.yml   # optional, default "docker-compose.yml"
                                          # File-level default; a target
                                          # may override it.
 
+ensure_branch: main                     # optional, no default (unset = no check).
+                                         # Every command refuses to run
+                                         # unless the local checkout is
+                                         # currently on this branch --
+                                         # a guard against e.g. running
+                                         # deploy.yml from a feature
+                                         # branch by accident.
+
 secrets:                                # optional. Omit entirely if no
                                          # target in this file uses secrets.
   provider: infisical                   # required if `secrets:` present.
@@ -193,6 +201,7 @@ and sometimes different auth:
 version: 1
 remote_repo: /srv/git/{repo}.git
 branch: main
+ensure_branch: main                     # refuse to run this file from anywhere but main
 compose_file: docker-compose.prod.yml
 targets:
   - name: app

@@ -1,12 +1,16 @@
+<p align="center">
+  <img src="assets/wharf_logo.png" alt="wharf logo" width="160">
+</p>
+
 # wharf
 
-Deploy-as-code for docker compose projects over SSH — no container registry
+Deploy-as-code for docker compose projects over SSH. no container registry
 required.
 
 wharf pushes your project's source straight to each target host over git
 (the same trick Heroku-style `git push` deploys use), builds the image
 *on* the target with `docker compose build`, and starts it. There's no
-registry to run, pay for, or keep patched — the target already has
+registry to run, pay for, or keep patched: the target already has
 everything it needs to build the image itself.
 
 A single YAML file describes an environment: where the git remote lives
@@ -17,7 +21,7 @@ own machine or from a CI job.
 
 ## Install
 
-wharf isn't published anywhere public yet — install straight from git,
+wharf isn't published anywhere public yet. Install straight from git,
 pinned to a tag:
 
 ```bash
@@ -52,7 +56,7 @@ wharf reload deploy.yml
 ```
 
 Run the exact same `wharf deploy deploy.yml` from a GitHub Actions
-workflow — see [docs/configuration.md](docs/configuration.md#running-from-ci)
+workflow, see [docs/configuration.md](docs/configuration.md#running-from-ci)
 for the two-line workflow that does it.
 
 ## Commands
@@ -61,7 +65,7 @@ for the two-line workflow that does it.
 |---|---|
 | `wharf deploy <config.yml>` | Push the current revision, build, and start each target in order. |
 | `wharf down <config.yml> [--volumes]` | Stop each target; `--volumes` also removes its volumes. |
-| `wharf reload <config.yml>` | Re-run compose without rebuilding — picks up rotated secrets or just restarts. |
+| `wharf reload <config.yml>` | Re-run compose without rebuilding, picks up rotated secrets or just restarts. |
 | `wharf ls <config.yml>` | List a config's targets and their order, without connecting to anything. |
 | `wharf setup <config.yml>` | Bootstrap: generate a deploy keypair, create bare repos, authorize the key. |
 
@@ -71,15 +75,20 @@ name. `deploy` also accepts `--revision SHA`. See
 [docs/configuration.md](docs/configuration.md) for the full config
 reference, worked examples, and how local vs. CI auth is handled.
 
+Every command checks GitHub for a newer release first (skipped in CI,
+or anywhere with `WHARF_NO_UPDATE_CHECK` set) and prints a one-line
+notice if one exists -- it never downloads or installs anything on its
+own.
+
 ## Design notes
 
 - **The compose file is the source of truth.** wharf never generates or
-  edits it — it only ever runs `docker compose -f <file> {up|down}`
+  edits it. It only ever runs `docker compose -f <file> {up|down}`
   against whatever's committed in your repo.
 - **No per-project deploy script.** The up/down/reload logic (locking,
   checkout, secrets injection, image cleanup) is built into wharf itself
   and driven entirely by the config file, so there's nothing to keep in
   sync across projects.
 - **Config files are flat.** There's no `production:`/`staging:` wrapper
-  key — the filename (`deploy.yml`, `deploy.staging.yml`, ...) is what
+  key, the filename (`deploy.yml`, `deploy.staging.yml`, ...) is what
   tells you which environment a file represents.

@@ -20,6 +20,7 @@ import subprocess
 from pathlib import Path
 
 from .config import Config, Target, render_repo_template
+from .operations import _check_branch
 from .ssh import SessionAuth, build_ssh_argv, run_streaming
 
 DEFAULT_KEY_DIR = Path(".wharf")
@@ -86,6 +87,7 @@ fi
 
 def setup(config: Config, *, repo: str, only: tuple[str, ...] = ()) -> None:
     """Bootstrap every selected target: bare repo, remote dir, deploy key."""
+    _check_branch(config)
     private_key, public_key_path = ensure_deploy_keypair()
     public_key = public_key_path.read_text().strip()
 

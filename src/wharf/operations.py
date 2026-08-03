@@ -28,6 +28,35 @@ class OperationError(RuntimeError):
         self.cause = cause
 
 
+class BranchMismatchError(RuntimeError):
+    """Raised when a config's ``ensure_branch`` doesn't match the checkout."""
+
+    def __init__(self, expected: str, actual: str):
+        super().__init__(
+            f"ensure_branch: this config requires branch '{expected}', "
+            f"but the current checkout is on '{actual}'"
+        )
+
+
+def infer_current_branch(cwd: Path | None = None) -> str:
+    """The current checkout's branch name, for ``ensure_branch`` checks."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=cwd, capture_output=True, text=True, check=True,
+    )
+    return result.stdout.strip()
+
+
+def _check_branch(config: Config, cwd: Path | None = None) -> None:
+    """No-op unless the config sets ``ensure_branch``; guards against
+    e.g. running a prod config from a feature branch by accident."""
+    if config.ensure_branch is None:
+        return
+    current = infer_current_branch(cwd)
+    if current != config.ensure_branch:
+        raise BranchMismatchError(config.ensure_branch, current)
+
+
 def infer_repo_name(cwd: Path | None = None) -> str:
     """The project name used to fill ``{repo}`` in path templates.
 
@@ -71,6 +100,7 @@ def deploy(
     force_ci: bool | None = None,
 ) -> None:
     """Push, checkout, build, and healthcheck each selected target in order."""
+    _check_branch(config)
     for target in config.select_targets(only):
         print(f"==> Deploying {target.name} ({target.host}:{target.port})")
         auth = SessionAuth.resolve(force_ci=force_ci)
@@ -103,6 +133,7 @@ def down(
     force_ci: bool | None = None,
 ) -> None:
     """Stop (and optionally wipe volumes for) each selected target."""
+    _check_branch(config)
     for target in config.select_targets(only):
         print(f"==> Stopping {target.name} ({target.host}:{target.port})")
         auth = SessionAuth.resolve(force_ci=force_ci)
@@ -129,6 +160,7 @@ def reload(
     force_ci: bool | None = None,
 ) -> None:
     """Re-apply compose (no rebuild) for each selected target."""
+    _check_branch(config)
     for target in config.select_targets(only):
         print(f"==> Reloading {target.name} ({target.host}:{target.port})")
         auth = SessionAuth.resolve(force_ci=force_ci)

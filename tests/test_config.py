@@ -22,9 +22,16 @@ def test_minimal_config_parses_with_defaults(write_config):
     assert config.branch == DEFAULT_BRANCH
     assert config.compose_file == DEFAULT_COMPOSE_FILE
     assert config.secrets is None
+    assert config.ensure_branch is None
     assert len(config.targets) == 1
     assert config.targets[0].name == "app"
     assert config.targets[0].uses_secrets is False
+
+
+def test_ensure_branch_parses_when_present(write_config):
+    text = VALID_MINIMAL + "ensure_branch: main\n"
+    config = load_config(write_config(text))
+    assert config.ensure_branch == "main"
 
 
 def test_unknown_root_key_rejected(write_config):

@@ -114,6 +114,7 @@ class Config:
     compose_file: str
     secrets: SecretsDefaults | None
     targets: tuple[Target, ...]  # always sorted by Target.order
+    ensure_branch: str | None = None
 
     def compose_file_for(self, target: Target) -> str:
         """A target's own compose_file overrides the file-level default."""
@@ -256,7 +257,7 @@ def load_config(path: Path) -> Config:
     _exact_keys(
         document,
         {"version", "remote_repo", "targets"},
-        optional=frozenset({"branch", "compose_file", "secrets"}),
+        optional=frozenset({"branch", "compose_file", "secrets", "ensure_branch"}),
         label="root",
     )
     assert isinstance(document, dict)
@@ -292,4 +293,9 @@ def load_config(path: Path) -> Config:
         ),
         secrets=secrets,
         targets=tuple(sorted(targets, key=lambda t: t.order)),
+        ensure_branch=(
+            _nonempty_string(document["ensure_branch"], "ensure_branch")
+            if "ensure_branch" in document
+            else None
+        ),
     )

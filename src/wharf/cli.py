@@ -13,6 +13,7 @@ override wharf's automatic CI-vs-local detection (see wharf.ssh.is_ci).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -20,8 +21,9 @@ import yaml
 
 from . import operations, setup as setup_mod
 from .config import Config, ConfigError, load_config
-from .operations import OperationError
-from .ssh import RemoteCommandError
+from .operations import BranchMismatchError, OperationError
+from .ssh import RemoteCommandError, is_ci
+from .update_check import check_for_update
 
 
 def _add_common(parser: argparse.ArgumentParser, *, needs_only: bool = True) -> None:
@@ -94,6 +96,9 @@ def _resolve_repo(args: argparse.Namespace) -> str:
 def _run_operation(fn, *args, **kwargs) -> int:
     try:
         fn(*args, **kwargs)
+    except BranchMismatchError as exc:
+        print(f"wharf: {exc}", file=sys.stderr)
+        return 2
     except OperationError as exc:
         print(f"wharf: {exc}", file=sys.stderr)
         if isinstance(exc.cause, RemoteCommandError):
@@ -104,6 +109,13 @@ def _run_operation(fn, *args, **kwargs) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Best-effort, silent-on-failure; skipped in CI to avoid adding a
+    # network call (and GitHub rate-limit exposure) to every deploy.
+    if not is_ci() and not os.environ.get("WHARF_NO_UPDATE_CHECK"):
+        notice = check_for_update()
+        if notice:
+            print(notice, file=sys.stderr)
 
     if args.command == "ls":
         config = _load(args.config)
@@ -118,6 +130,9 @@ def main(argv: list[str] | None = None) -> int:
         repo = _resolve_repo(args)
         try:
             setup_mod.setup(config, repo=repo, only=tuple(args.only))
+        except BranchMismatchError as exc:
+            print(f"wharf: {exc}", file=sys.stderr)
+            return 2
         except RemoteCommandError as exc:
             print(f"wharf: {exc}", file=sys.stderr)
             return exc.returncode
