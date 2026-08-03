@@ -17,7 +17,7 @@ from urllib.error import URLError
 
 from . import __version__
 
-GITHUB_REPO = "YOUR_ORG/wharf"  # update once wharf has a real GitHub remote
+GITHUB_REPO = "alessandropolverino/wharf"
 _RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _TIMEOUT_SECONDS = 2.0
 

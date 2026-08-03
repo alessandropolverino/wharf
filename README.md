@@ -25,10 +25,10 @@ wharf isn't published anywhere public yet. Install straight from git,
 pinned to a tag:
 
 ```bash
-uvx --from git+ssh://git@github.com/YOUR_ORG/wharf.git@v0.1.0 wharf --help
+uvx --from git+ssh://git@github.com/alessandropolverino/wharf.git@v0.1.0 wharf --help
 
 # or, into a virtualenv:
-pip install "wharf @ git+ssh://git@github.com/YOUR_ORG/wharf.git@v0.1.0"
+pip install "wharf @ git+ssh://git@github.com/alessandropolverino/wharf.git@v0.1.0"
 ```
 
 Requires `git`, `ssh`/`ssh-keygen`, and `docker compose` on the machine
