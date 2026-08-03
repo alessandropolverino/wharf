@@ -21,18 +21,22 @@ own machine or from a CI job.
 
 ## Install
 
-wharf isn't published anywhere public yet. Install straight from git,
-pinned to a tag:
+wharf isn't published to PyPI yet. Install straight from git, pinned to
+a tag:
 
 ```bash
-uvx --from git+ssh://git@github.com/alessandropolverino/wharf.git@v0.1.0 wharf --help
+uvx --from git+https://github.com/alessandropolverino/wharf.git@v0.1.0 wharf --help
 
 # or, into a virtualenv:
-pip install "wharf @ git+ssh://git@github.com/alessandropolverino/wharf.git@v0.1.0"
+pip install "wharf @ git+https://github.com/alessandropolverino/wharf.git@v0.1.0"
+
+# or, as a standalone global tool (recommended for actual use):
+uv tool install --from git+https://github.com/alessandropolverino/wharf.git@v0.1.0 wharf
 ```
 
-Requires `git`, `ssh`/`ssh-keygen`, and `docker compose` on the machine
-you deploy *to*; `git` and `ssh` on the machine you deploy *from*.
+Requires `git` and `docker compose` on the machine you deploy *to*;
+`git` and `ssh` on the machine you deploy *from* (SSH is only needed for
+deploying to your targets, not for installing wharf itself).
 
 ## Quickstart
 
