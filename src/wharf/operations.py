@@ -52,7 +52,10 @@ def _check_branch(config: Config, cwd: Path | None = None) -> None:
     e.g. running a prod config from a feature branch by accident."""
     if config.ensure_branch is None:
         return
-    current = infer_current_branch(cwd)
+    try:
+        current = infer_current_branch(cwd)
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise BranchMismatchError(config.ensure_branch, f"<could not determine current branch: {exc}>") from exc
     if current != config.ensure_branch:
         raise BranchMismatchError(config.ensure_branch, current)
 

@@ -286,5 +286,8 @@ are never generated, stored, or passed by wharf — they're expected to
 already exist as environment variables **on the target host** (e.g.
 sourced from `/etc/profile.d/` at login), the same way they would for
 any other process running there. wharf's `deploy` and `reload` actions
-simply run `infisical login` + `infisical run -- docker compose ...` on
-the target when a target declares `paths`.
+run their remote script via a login shell (`ssh ... bash -l -s`)
+specifically so that `/etc/profile.d/*.sh` gets sourced before
+`infisical login` + `infisical run -- docker compose ...` runs on the
+target when a target declares `paths` -- a plain non-login shell
+wouldn't source it, and the credentials would appear to be missing.

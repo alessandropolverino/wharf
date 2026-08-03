@@ -19,6 +19,7 @@ typed the command yourself.
 
 from __future__ import annotations
 
+import atexit
 import os
 import shlex
 import subprocess
@@ -83,9 +84,21 @@ class SessionAuth:
                 "DEPLOY_SSH_KEY is required when running in CI mode "
                 "(pass --interactive to force local/interactive auth instead)"
             )
-        key_path = Path(tempfile.gettempdir()) / f"wharf-deploy-key-{os.getpid()}"
-        key_path.write_text(key_material.rstrip("\n") + "\n")
-        key_path.chmod(0o600)
+        # mkstemp (unlike a hand-built path) creates the file itself with
+        # O_EXCL, so it can't follow a pre-existing symlink at a predictable
+        # path, and the name isn't guessable. Cleaned up at process exit
+        # since the file needs to outlive individual SSH invocations (it's
+        # re-resolved once per target).
+        fd, key_path_str = tempfile.mkstemp(prefix="wharf-deploy-key-")
+        key_path = Path(key_path_str)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(key_material.rstrip("\n") + "\n")
+            key_path.chmod(0o600)
+        except BaseException:
+            key_path.unlink(missing_ok=True)
+            raise
+        atexit.register(key_path.unlink, missing_ok=True)
         return cls(batch=True, identity_file=key_path)
 
 
@@ -162,15 +175,22 @@ def run_remote_script(
     *,
     description: str,
 ) -> None:
-    """Run ``script`` on ``target`` via `bash -s`, piped over stdin.
+    """Run ``script`` on ``target`` via a login `bash -s`, piped over stdin.
 
-    ``env_vars`` are set as a shell-level prefix (``KEY=value bash -s``)
+    ``env_vars`` are set as a shell-level prefix (``KEY=value bash -l -s``)
     on the remote command line, the same technique the original
     per-repo deploy scripts used -- it keeps the script text itself
     free of assumptions about how its inputs arrived, which is handy
     when eyeballing logs.
+
+    ``-l`` (login shell) is required, not cosmetic: it's what makes bash
+    source ``/etc/profile`` (and thus ``/etc/profile.d/*.sh``) before
+    running the script, which is where docs/configuration.md says
+    Infisical's machine-identity credentials are expected to live. A
+    plain non-login ``bash -s`` would silently skip that and leave those
+    variables unset.
     """
     argv = build_ssh_argv(target, auth)
     prefix = [f"{key}={shlex.quote(value)}" for key, value in env_vars.items()]
-    argv += prefix + ["bash", "-s"]
+    argv += prefix + ["bash", "-l", "-s"]
     run_streaming(argv, description=description, input_text=script)

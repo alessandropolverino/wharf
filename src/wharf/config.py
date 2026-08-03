@@ -141,6 +141,9 @@ class Config:
 def _exact_keys(value: object, required: set[str], optional: frozenset[str] = frozenset(), *, label: str) -> None:
     if not isinstance(value, dict):
         raise ConfigError(f"{label} must be a mapping")
+    non_string_keys = [key for key in value if not isinstance(key, str)]
+    if non_string_keys:
+        raise ConfigError(f"{label} keys must be strings, got {sorted(map(repr, non_string_keys))}")
     keys = set(value)
     allowed = required | optional
     if not required <= keys <= allowed:

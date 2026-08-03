@@ -60,22 +60,28 @@ def _provision_target(config: Config, target: Target, repo: str, public_key: str
     remote_repo_q = shlex.quote(remote_repo)
     remote_dir_q = shlex.quote(remote_dir)
     public_key_q = shlex.quote(public_key)
+    target_name_q = shlex.quote(target.name)
+    # Interpolating remote_repo/target.name straight into a double-quoted
+    # echo string would still let $(...) / backticks inside them execute on
+    # the target (double quotes don't stop command substitution) -- so the
+    # already-shell-quoted variables are passed as separate, unquoted-by-us
+    # echo arguments instead, the same way the *_q values are used elsewhere.
     script = f"""\
 set -euo pipefail
 if [ ! -d {remote_repo_q} ]; then
   git init --bare {remote_repo_q}
-  echo "Created bare repo at {remote_repo}"
+  echo "Created bare repo at" {remote_repo_q}
 else
-  echo "Bare repo already exists at {remote_repo}"
+  echo "Bare repo already exists at" {remote_repo_q}
 fi
 mkdir -p {remote_dir_q}
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
 touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
 if grep -qxF {public_key_q} ~/.ssh/authorized_keys; then
-  echo "Deploy key already authorized on {target.name}"
+  echo "Deploy key already authorized on" {target_name_q}
 else
   echo {public_key_q} >> ~/.ssh/authorized_keys
-  echo "Authorized deploy key on {target.name}"
+  echo "Authorized deploy key on" {target_name_q}
 fi
 """
     run_streaming(

@@ -110,13 +110,6 @@ def _run_operation(fn, *args, **kwargs) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    # Best-effort, silent-on-failure; skipped in CI to avoid adding a
-    # network call (and GitHub rate-limit exposure) to every deploy.
-    if not is_ci() and not os.environ.get("WHARF_NO_UPDATE_CHECK"):
-        notice = check_for_update()
-        if notice:
-            print(notice, file=sys.stderr)
-
     if args.command == "ls":
         config = _load(args.config)
         for target in config.targets:
@@ -124,6 +117,14 @@ def main(argv: list[str] | None = None) -> int:
             healthcheck_note = f" -> {target.healthcheck}" if target.healthcheck else ""
             print(f"{target.order:>4}  {target.name:<20} {target.user}@{target.host}:{target.port}{secrets_note}{healthcheck_note}")
         return 0
+
+    # Best-effort, silent-on-failure; skipped in CI (and for `ls`, which is
+    # documented as never touching the network) to avoid adding a network
+    # call (and GitHub rate-limit exposure) where it isn't expected.
+    if not is_ci() and not os.environ.get("WHARF_NO_UPDATE_CHECK"):
+        notice = check_for_update()
+        if notice:
+            print(notice, file=sys.stderr)
 
     if args.command == "setup":
         config = _load(args.config)

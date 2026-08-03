@@ -17,6 +17,11 @@ from urllib.error import URLError
 
 from . import __version__
 
+# Note: the GitHub REST API requires authentication to read releases on a
+# private repo, which this repo currently is -- until it's made public (or
+# this module is given a token), check_for_update() will always fail closed
+# via the except clause below and never report anything. That's fine: it's
+# still a silent no-op, exactly like every other failure mode here.
 GITHUB_REPO = "alessandropolverino/wharf"
 _RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _TIMEOUT_SECONDS = 2.0
@@ -36,11 +41,13 @@ def check_for_update() -> str | None:
     try:
         with urllib.request.urlopen(_RELEASES_URL, timeout=_TIMEOUT_SECONDS) as response:
             latest_tag = json.load(response)["tag_name"]
+        if not isinstance(latest_tag, str):
+            return None
         if _parse_version(latest_tag) > _parse_version(__version__):
             return (
                 f"wharf: a newer release is available ({latest_tag}, running "
                 f"{__version__}) -- see https://github.com/{GITHUB_REPO}/releases"
             )
-    except (URLError, TimeoutError, KeyError, ValueError, OSError):
+    except (URLError, TimeoutError, KeyError, ValueError, OSError, AttributeError, TypeError):
         pass
     return None
