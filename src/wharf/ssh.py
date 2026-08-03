@@ -123,8 +123,16 @@ def _pin_known_hosts(target: Target) -> Path:
     return Path(handle.name)
 
 
-def build_ssh_argv(target: Target, auth: SessionAuth) -> list[str]:
-    """The argv for an `ssh` invocation against ``target``."""
+def _ssh_option_argv(target: Target, auth: SessionAuth) -> list[str]:
+    """The `ssh` argv up to (but not including) the destination.
+
+    Split out from :func:`build_ssh_argv` because ``GIT_SSH_COMMAND``
+    (see :func:`build_git_ssh_command`) must **not** include a
+    destination itself -- git appends its own `[-p port] user@host
+    <command>` onto whatever ``GIT_SSH_COMMAND`` contains, so baking the
+    destination into that string too makes ssh see two destinations and
+    treat the second one as a remote command to execute.
+    """
     known_hosts = _pin_known_hosts(target)
     argv = [
         "ssh",
@@ -136,13 +144,21 @@ def build_ssh_argv(target: Target, auth: SessionAuth) -> list[str]:
         argv += ["-o", "BatchMode=yes"]
     if auth.identity_file:
         argv += ["-i", str(auth.identity_file), "-o", "IdentitiesOnly=yes"]
-    argv.append(f"{target.user}@{target.host}")
     return argv
 
 
+def build_ssh_argv(target: Target, auth: SessionAuth) -> list[str]:
+    """The argv for a standalone `ssh` invocation against ``target``."""
+    return _ssh_option_argv(target, auth) + [f"{target.user}@{target.host}"]
+
+
 def build_git_ssh_command(target: Target, auth: SessionAuth) -> str:
-    """A ``GIT_SSH_COMMAND`` string equivalent to :func:`build_ssh_argv`."""
-    return " ".join(shlex.quote(part) for part in build_ssh_argv(target, auth))
+    """A ``GIT_SSH_COMMAND`` string: options only, no destination.
+
+    Git appends `[-p port] user@host <command>` itself when it invokes
+    this, based on the push URL -- see :func:`_ssh_option_argv`.
+    """
+    return " ".join(shlex.quote(part) for part in _ssh_option_argv(target, auth))
 
 
 def run_streaming(
