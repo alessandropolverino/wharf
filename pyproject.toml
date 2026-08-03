@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wharf"
+version = "0.1.0"
+description = "Deploy-as-code for docker compose projects over SSH, no container registry required."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6,<7",
+]
+
+[project.scripts]
+wharf = "wharf.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wharf"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
