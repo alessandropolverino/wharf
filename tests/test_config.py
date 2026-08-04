@@ -109,3 +109,41 @@ def test_per_target_compose_file_override(write_config):
     )
     config = load_config(write_config(text))
     assert config.compose_file_for(config.targets[0]) == "docker-compose.custom.yml"
+
+
+def test_pre_up_defaults_to_none(write_config):
+    config = load_config(write_config(VALID_MINIMAL))
+    assert config.targets[0].pre_up is None
+
+
+def test_pre_up_accepts_valid_service_names(write_config):
+    text = VALID_MINIMAL.replace(
+        "    order: 10\n",
+        '    order: 10\n    pre_up: ["migrate-janus", "bootstrap-dashboard-admin"]\n',
+    )
+    config = load_config(write_config(text))
+    assert config.targets[0].pre_up == ("migrate-janus", "bootstrap-dashboard-admin")
+
+
+def test_pre_up_rejects_leading_dash(write_config):
+    text = VALID_MINIMAL.replace(
+        "    order: 10\n", '    order: 10\n    pre_up: ["--rm"]\n'
+    )
+    with pytest.raises(ConfigError, match="compose service name"):
+        load_config(write_config(text))
+
+
+def test_pre_up_rejects_empty_list(write_config):
+    text = VALID_MINIMAL.replace(
+        "    order: 10\n", "    order: 10\n    pre_up: []\n"
+    )
+    with pytest.raises(ConfigError, match="non-empty list"):
+        load_config(write_config(text))
+
+
+def test_pre_up_rejects_shell_metacharacters(write_config):
+    text = VALID_MINIMAL.replace(
+        "    order: 10\n", '    order: 10\n    pre_up: ["svc; rm -rf /"]\n'
+    )
+    with pytest.raises(ConfigError, match="compose service name"):
+        load_config(write_config(text))

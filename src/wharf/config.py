@@ -41,6 +41,7 @@ checkout) at deploy time -- see :func:`render_repo_template`.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -50,6 +51,7 @@ import yaml
 SUPPORTED_SECRETS_PROVIDERS = frozenset({"infisical"})
 DEFAULT_BRANCH = "main"
 DEFAULT_COMPOSE_FILE = "docker-compose.yml"
+_COMPOSE_SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class ConfigError(ValueError):
@@ -98,6 +100,7 @@ class Target:
     healthcheck: str | None = None
     compose_file: str | None = None
     paths: tuple[str, ...] | None = None
+    pre_up: tuple[str, ...] | None = None
 
     @property
     def uses_secrets(self) -> bool:
@@ -197,6 +200,22 @@ def _string_list(value: object, label: str) -> tuple[str, ...]:
     return tuple(_nonempty_string(item, f"{label}[{i}]") for i, item in enumerate(value))
 
 
+def _compose_service_name(value: object, label: str) -> str:
+    text = _nonempty_string(value, label)
+    if not _COMPOSE_SERVICE_NAME_RE.match(text):
+        raise ConfigError(
+            f"{label} must be a valid compose service name "
+            "(letters, digits, '.', '_', '-', not starting with '-')"
+        )
+    return text
+
+
+def _compose_service_list(value: object, label: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value:
+        raise ConfigError(f"{label} must be a non-empty list of strings")
+    return tuple(_compose_service_name(item, f"{label}[{i}]") for i, item in enumerate(value))
+
+
 def _load_secrets_defaults(value: object) -> SecretsDefaults:
     _exact_keys(value, {"provider", "project_id", "domain", "environment"}, label="secrets")
     assert isinstance(value, dict)
@@ -216,7 +235,7 @@ def _load_secrets_defaults(value: object) -> SecretsDefaults:
 def _load_target(value: object, index: int, *, secrets_configured: bool) -> Target:
     label = f"targets[{index}]"
     required = {"name", "remote_dir", "host", "port", "user", "host_key", "order"}
-    optional = frozenset({"healthcheck", "compose_file", "paths"})
+    optional = frozenset({"healthcheck", "compose_file", "paths", "pre_up"})
     _exact_keys(value, required, optional, label=label)
     assert isinstance(value, dict)
 
@@ -237,6 +256,7 @@ def _load_target(value: object, index: int, *, secrets_configured: bool) -> Targ
         healthcheck=_url(value["healthcheck"], f"{label}.healthcheck") if "healthcheck" in value else None,
         compose_file=_nonempty_string(value["compose_file"], f"{label}.compose_file") if "compose_file" in value else None,
         paths=paths,
+        pre_up=_compose_service_list(value["pre_up"], f"{label}.pre_up") if "pre_up" in value else None,
     )
 
 
