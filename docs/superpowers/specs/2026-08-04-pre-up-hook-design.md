@@ -16,7 +16,7 @@ targets:
     ...
 ```
 
-`config.py`: add `pre_up: tuple[str, ...] | None = None` to `Target`, parsed with the existing `_string_list` helper (already used for `paths`). No new validation logic — a compose service name has the same "non-empty string" shape as a path.
+`config.py`: add `pre_up: tuple[str, ...] | None = None` to `Target`. Unlike `paths`, a `pre_up` entry becomes a literal argv token passed to `docker compose run --rm --build <service>` on the remote host (see Execution below) — a value that shell-quotes cleanly but starts with `-` (e.g. `--rm`, `--entrypoint=sh`) would still be parsed by `docker compose` as a flag, not a service name, regardless of quoting. So `pre_up` gets its own validator, `_compose_service_name`, instead of reusing `_nonempty_string`/`_string_list` as-is: each entry must be non-empty, must not start with `-`, and must match `^[A-Za-z0-9][A-Za-z0-9._-]*$` (the character set Compose itself allows for service names).
 
 ## Secrets
 
@@ -33,10 +33,14 @@ This avoids calling `infisical login` once per command (as a naive reuse of the 
 In `render_up`, each `pre_up` entry becomes:
 
 ```bash
-{run_prefix}docker compose -f "$compose_file" run --rm <service>
+{run_prefix}docker compose -f "$compose_file" run --rm --build {shlex.quote(service)}
 ```
 
-emitted in list order, after checkout and before the final `up -d --build --remove-orphans` line. `render_down` and `render_reload` are unchanged — the old scripts never ran migrations on down or reload either.
+with the service name passed through `shlex.quote` at render time, same as every other config value `remote_script.py` embeds (`remote_repo`, `remote_dir`, `compose_file`, ...) — belt-and-suspenders alongside the `_compose_service_name` validation above, not a substitute for it.
+
+The `--build` flag is required, not cosmetic: `docker compose run` reuses a cached image if one already exists and only builds when forced to, so without `--build` a migration container can run against the previous release's image while the final `up --build` builds and starts the new one — i.e. migrations for schema changes the new code expects would run before those changes exist. Passing `--build` on every `pre_up` invocation forces each to build first; Compose's layer cache means the later `up -d --build` is then a no-op rebuild, not a second real build.
+
+`pre_up` commands are emitted in list order, after checkout and before the final `up -d --build --remove-orphans` line. `render_down` and `render_reload` are unchanged — the old scripts never ran migrations on down or reload either.
 
 ## Failure handling
 
@@ -46,8 +50,13 @@ No new code needed. `render_up`'s script already starts with `set -euo pipefail`
 
 Add `tests/test_remote_script.py` (this module currently has no direct test coverage):
 - A target with no `pre_up` renders identically to today (no regression).
-- A target with `pre_up` renders each `run --rm <service>` line, in order, after checkout and before `up`.
+- A target with `pre_up` renders each `run --rm --build <service>` line, in order, after checkout and before `up`, with the service name `shlex.quote`d.
 - With `secrets`/`paths` configured, `infisical login` appears exactly once in the rendered script regardless of how many `pre_up` entries exist, and each `pre_up`/`up` line is prefixed with `infisical run ... --token "$infisical_token" --`.
+
+Add to `tests/test_config.py`:
+- `pre_up` entries are accepted when they match `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
+- A `pre_up` entry starting with `-` (e.g. `--rm`, `-x`) is rejected with a `ConfigError`, so a malformed/malicious entry can't be interpreted as a `docker compose run` flag.
+- An empty `pre_up` entry, or a value containing shell metacharacters (`;`, `` ` ``, `$(`, whitespace) outside the allowed character set, is rejected.
 
 ## Scope
 
