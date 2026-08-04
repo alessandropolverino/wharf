@@ -82,3 +82,56 @@ def test_render_down_has_no_secrets_wrapping():
 def test_render_down_with_volumes_adds_flag():
     script = render_down(remote_dir="/opt/deploys/app", compose_file="docker-compose.yml", volumes=True)
     assert 'docker compose -f "$compose_file" down --volumes' in script
+
+
+def test_render_up_with_pre_up_runs_before_up_command():
+    script = render_up(
+        remote_repo="/srv/git/app.git",
+        remote_dir="/opt/deploys/app",
+        compose_file="docker-compose.yml",
+        secrets=None,
+        paths=None,
+        pre_up=("migrate-janus", "bootstrap-dashboard-admin"),
+    )
+    migrate_index = script.index("run --rm --build migrate-janus")
+    bootstrap_index = script.index("run --rm --build bootstrap-dashboard-admin")
+    up_index = script.index("up -d --build --remove-orphans")
+    assert migrate_index < bootstrap_index < up_index
+
+
+def test_render_up_pre_up_commands_are_shlex_quoted():
+    script = render_up(
+        remote_repo="/srv/git/app.git",
+        remote_dir="/opt/deploys/app",
+        compose_file="docker-compose.yml",
+        secrets=None,
+        paths=None,
+        pre_up=("migrate-janus",),
+    )
+    assert 'docker compose -f "$compose_file" run --rm --build migrate-janus' in script
+
+
+def test_render_up_with_pre_up_and_secrets_calls_login_once():
+    script = render_up(
+        remote_repo="/srv/git/app.git",
+        remote_dir="/opt/deploys/app",
+        compose_file="docker-compose.yml",
+        secrets=SECRETS,
+        paths=("/core/",),
+        pre_up=("migrate-janus", "bootstrap-dashboard-admin", "migrate-janusdashboard"),
+    )
+    assert script.count("infisical login") == 1
+    assert script.count("infisical run --env=prod --path=/core/") == 4  # 3 pre_up + 1 up
+    for service in ("migrate-janus", "bootstrap-dashboard-admin", "migrate-janusdashboard"):
+        assert f"run --rm --build {service}" in script
+
+
+def test_render_up_without_pre_up_matches_no_pre_up_behavior():
+    script = render_up(
+        remote_repo="/srv/git/app.git",
+        remote_dir="/opt/deploys/app",
+        compose_file="docker-compose.yml",
+        secrets=None,
+        paths=None,
+    )
+    assert "run --rm" not in script
