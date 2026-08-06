@@ -71,7 +71,7 @@ targets:                                # required, non-empty list.
                                          # `secrets:` block to exist.
     pre_up: [migrate, bootstrap]        # optional. Compose service names
                                          # run via `docker compose run
-                                         # --rm --build <service>`, in
+                                         # --rm -T --build <service>`, in
                                          # order, after checkout and
                                          # before `up`. Wrapped with the
                                          # same secrets injection as `up`
