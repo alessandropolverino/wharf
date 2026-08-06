@@ -202,7 +202,7 @@ def _string_list(value: object, label: str) -> tuple[str, ...]:
 
 def _compose_service_name(value: object, label: str) -> str:
     text = _nonempty_string(value, label)
-    if not _COMPOSE_SERVICE_NAME_RE.match(text):
+    if not _COMPOSE_SERVICE_NAME_RE.fullmatch(text):
         raise ConfigError(
             f"{label} must be a valid compose service name "
             "(letters, digits, '.', '_', '-', not starting with '-')"
@@ -212,7 +212,7 @@ def _compose_service_name(value: object, label: str) -> str:
 
 def _compose_service_list(value: object, label: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not value:
-        raise ConfigError(f"{label} must be a non-empty list of strings")
+        raise ConfigError(f"{label} must be a non-empty list of compose service names")
     return tuple(_compose_service_name(item, f"{label}[{i}]") for i, item in enumerate(value))
 
 

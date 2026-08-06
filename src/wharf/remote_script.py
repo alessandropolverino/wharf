@@ -87,17 +87,21 @@ def render_up(
     """Deploy action: checkout $REVISION, run pre_up hooks, build, start, prune old images.
 
     Each ``pre_up`` entry runs as ``docker compose run --rm -T --build
-    <service>`` before the final ``up`` -- for one-off migration/bootstrap
-    commands. ``--build`` is mandatory: `docker compose run` reuses a
-    cached image by default, so without it a migration could run against
-    the previous release's image while `up --build` builds and starts the
-    new one. ``-T`` is mandatory too: the whole script is piped into `ssh
-    ... bash -s` over stdin (see :func:`wharf.ssh.run_remote_script`), and
-    without ``-T`` `docker compose run` can attach to that same stdin,
-    silently swallowing the rest of the script.
+    <service> </dev/null`` before the final ``up`` -- for one-off
+    migration/bootstrap commands. ``--build`` is mandatory: `docker
+    compose run` reuses a cached image by default, so without it a
+    migration could run against the previous release's image while `up
+    --build` builds and starts the new one. ``-T`` and ``</dev/null`` are
+    both mandatory: the whole script is piped into `ssh ... bash -s` over
+    stdin (see :func:`wharf.ssh.run_remote_script`). ``-T`` only disables
+    pseudo-TTY allocation -- it does not disable `docker compose run`'s
+    ``--interactive`` default, so without ``</dev/null`` the container can
+    still attach to and drain that same stdin pipe, silently swallowing
+    the rest of the script (including the final `up`) while the process
+    still exits 0.
     """
     pre_up_commands = [
-        f'docker compose -f "$compose_file" run --rm -T --build {shlex.quote(service)}'
+        f'docker compose -f "$compose_file" run --rm -T --build {shlex.quote(service)} </dev/null'
         for service in (pre_up or ())
     ]
     commands_block = _wrapped_commands_block(

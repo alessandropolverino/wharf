@@ -71,13 +71,27 @@ targets:                                # required, non-empty list.
                                          # `secrets:` block to exist.
     pre_up: [migrate, bootstrap]        # optional. Compose service names
                                          # run via `docker compose run
-                                         # --rm -T --build <service>`, in
-                                         # order, after checkout and
-                                         # before `up`. Wrapped with the
-                                         # same secrets injection as `up`
-                                         # when this target sets `paths`.
-                                         # Not run by `wharf reload`.
+                                         # --rm -T --build <service>
+                                         # </dev/null`, in order, after
+                                         # checkout and before `up`.
+                                         # Wrapped with the same secrets
+                                         # injection as `up` when this
+                                         # target sets `paths`. Not run by
+                                         # `wharf reload`.
 ```
+
+`pre_up` requires a reasonably current Docker Compose v2 on the target
+host -- `--build` on `run` isn't supported by older Compose builds or
+Compose v1, and will fail with `unknown flag: --build` at deploy time
+(not at config-load time, since wharf can't inspect the target's
+Compose version ahead of the SSH call).
+
+If a `pre_up` command fails, the deploy aborts *after* the code checkout
+has already happened but *before* `up` runs -- so the target's working
+tree will have the new revision's code while the old containers are
+still running. This is intentional (fail before starting anything with
+the new code), but worth knowing when debugging a failed migration: the
+checkout has already moved even though nothing new is running yet.
 
 ### The `{repo}` placeholder
 

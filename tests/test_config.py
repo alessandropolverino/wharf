@@ -147,3 +147,11 @@ def test_pre_up_rejects_shell_metacharacters(write_config):
     )
     with pytest.raises(ConfigError, match="compose service name"):
         load_config(write_config(text))
+
+
+def test_pre_up_rejects_trailing_newline(write_config):
+    text = VALID_MINIMAL.replace(
+        "    order: 10\n", '    order: 10\n    pre_up: ["migrate\\n"]\n'
+    )
+    with pytest.raises(ConfigError, match="compose service name"):
+        load_config(write_config(text))

@@ -87,8 +87,9 @@ own.
 ## Design notes
 
 - **The compose file is the source of truth.** wharf never generates or
-  edits it. It only ever runs `docker compose -f <file> {up|down}`
-  against whatever's committed in your repo.
+  edits it. It only ever runs `docker compose -f <file> {up|down|run}`
+  against whatever's committed in your repo -- `run` only happens for
+  services explicitly listed in a target's `pre_up`.
 - **No per-project deploy script.** The up/down/reload logic (locking,
   checkout, secrets injection, image cleanup) is built into wharf itself
   and driven entirely by the config file, so there's nothing to keep in
