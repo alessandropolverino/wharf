@@ -116,6 +116,7 @@ def deploy(
                 compose_file=config.compose_file_for(target),
                 secrets=config.secrets,
                 paths=target.paths,
+                pre_up=target.pre_up,
             )
             run_remote_script(
                 target, auth, script, {"REVISION": revision},
