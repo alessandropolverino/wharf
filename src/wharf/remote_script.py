@@ -86,15 +86,18 @@ def render_up(
 ) -> str:
     """Deploy action: checkout $REVISION, run pre_up hooks, build, start, prune old images.
 
-    Each ``pre_up`` entry runs as ``docker compose run --rm --build
+    Each ``pre_up`` entry runs as ``docker compose run --rm -T --build
     <service>`` before the final ``up`` -- for one-off migration/bootstrap
     commands. ``--build`` is mandatory: `docker compose run` reuses a
     cached image by default, so without it a migration could run against
     the previous release's image while `up --build` builds and starts the
-    new one.
+    new one. ``-T`` is mandatory too: the whole script is piped into `ssh
+    ... bash -s` over stdin (see :func:`wharf.ssh.run_remote_script`), and
+    without ``-T`` `docker compose run` can attach to that same stdin,
+    silently swallowing the rest of the script.
     """
     pre_up_commands = [
-        f'docker compose -f "$compose_file" run --rm --build {shlex.quote(service)}'
+        f'docker compose -f "$compose_file" run --rm -T --build {shlex.quote(service)}'
         for service in (pre_up or ())
     ]
     commands_block = _wrapped_commands_block(
