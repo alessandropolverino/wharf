@@ -1,6 +1,6 @@
 import pytest
 
-from wharf.config import ConfigError, DEFAULT_BRANCH, DEFAULT_COMPOSE_FILE, load_config
+from wharf.config import ConfigError, DEFAULT_BRANCH, DEFAULT_COMPOSE_FILE, PreUpStep, load_config
 
 VALID_MINIMAL = """\
 version: 1
@@ -85,6 +85,18 @@ def test_secrets_and_paths_enable_uses_secrets(write_config):
     assert config.targets[0].uses_secrets is True
 
 
+def test_secrets_domain_rejects_http(write_config):
+    text = VALID_MINIMAL + (
+        "secrets:\n"
+        "  provider: infisical\n"
+        "  project_id: proj-123\n"
+        "  domain: http://eu.infisical.com\n"
+        "  environment: prod\n"
+    )
+    with pytest.raises(ConfigError, match="HTTPS"):
+        load_config(write_config(text))
+
+
 def test_unsupported_secrets_provider_rejected(write_config):
     text = VALID_MINIMAL + (
         "secrets:\n"
@@ -122,7 +134,67 @@ def test_pre_up_accepts_valid_service_names(write_config):
         '    order: 10\n    pre_up: ["migrate-janus", "bootstrap-dashboard-admin"]\n',
     )
     config = load_config(write_config(text))
-    assert config.targets[0].pre_up == ("migrate-janus", "bootstrap-dashboard-admin")
+    assert config.targets[0].pre_up == (
+        PreUpStep(service="migrate-janus"),
+        PreUpStep(service="bootstrap-dashboard-admin"),
+    )
+
+
+def test_pre_up_step_mapping_form_accepts_own_paths(write_config):
+    text = VALID_MINIMAL + (
+        "secrets:\n"
+        "  provider: infisical\n"
+        "  project_id: proj-123\n"
+        "  domain: https://eu.infisical.com\n"
+        "  environment: prod\n"
+    )
+    text = text.replace(
+        "    order: 10\n",
+        '    order: 10\n    paths: ["/svc/"]\n'
+        '    pre_up: ["migrate-janus", {service: bootstrap, paths: ["/svc/bootstrap/"]}]\n',
+    )
+    config = load_config(write_config(text))
+    assert config.targets[0].pre_up == (
+        PreUpStep(service="migrate-janus"),
+        PreUpStep(service="bootstrap", paths=("/svc/bootstrap/",)),
+    )
+    assert config.targets[0].uses_secrets is True
+
+
+def test_pre_up_step_mapping_form_requires_service_key(write_config):
+    text = VALID_MINIMAL.replace(
+        "    order: 10\n", '    order: 10\n    pre_up: [{paths: ["/svc/"]}]\n'
+    )
+    with pytest.raises(ConfigError, match="missing service"):
+        load_config(write_config(text))
+
+
+def test_pre_up_step_paths_without_secrets_block_rejected(write_config):
+    text = VALID_MINIMAL.replace(
+        "    order: 10\n",
+        '    order: 10\n    pre_up: [{service: migrate, paths: ["/svc/"]}]\n',
+    )
+    with pytest.raises(ConfigError, match="pre_up\\[0\\] declares paths but no top-level secrets block"):
+        load_config(write_config(text))
+
+
+def test_pre_up_step_without_paths_uses_secrets_purely_from_step(write_config):
+    # A target with no target-level `paths` but a pre_up step that declares
+    # its own is still "uses_secrets" -- that step alone injects secrets.
+    text = VALID_MINIMAL + (
+        "secrets:\n"
+        "  provider: infisical\n"
+        "  project_id: proj-123\n"
+        "  domain: https://eu.infisical.com\n"
+        "  environment: prod\n"
+    )
+    text = text.replace(
+        "    order: 10\n",
+        '    order: 10\n    pre_up: [{service: migrate, paths: ["/svc/"]}]\n',
+    )
+    config = load_config(write_config(text))
+    assert config.targets[0].paths is None
+    assert config.targets[0].uses_secrets is True
 
 
 def test_pre_up_rejects_leading_dash(write_config):

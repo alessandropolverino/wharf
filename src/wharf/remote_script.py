@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import shlex
 
-from .config import SecretsDefaults
+from .config import PreUpStep, SecretsDefaults
 
 _LOCK_FILE_NAME = ".wharf-deploy.lock"
 
@@ -31,11 +31,19 @@ def _secrets_login(secrets: SecretsDefaults) -> str:
     naive reuse of a single combined "login + run" string (the old
     ``_secrets_wrap``) once per wrapped command would call `infisical
     login` once per command instead.
+
+    The client ID/secret are passed via env-var prefix
+    (``INFISICAL_UNIVERSAL_AUTH_CLIENT_ID=... infisical login``) rather
+    than ``--client-id``/``--client-secret`` flags: flag values land in
+    the process's argv, readable by any local user via `ps` for the life
+    of the process, whereas an env-var prefix only sets the child's
+    environment (readable only by the same user or root via
+    /proc/<pid>/environ).
     """
     return f"""\
 : "${{INFISICAL_MACHINE_IDENTITY_ID:?INFISICAL_MACHINE_IDENTITY_ID is required on this host}}"
 : "${{INFISICAL_MACHINE_IDENTITY_CLIENT_SECRET:?INFISICAL_MACHINE_IDENTITY_CLIENT_SECRET is required on this host}}"
-infisical_token=$(infisical login --method=universal-auth --domain={shlex.quote(secrets.domain)} --client-id="$INFISICAL_MACHINE_IDENTITY_ID" --client-secret="$INFISICAL_MACHINE_IDENTITY_CLIENT_SECRET" --plain)
+infisical_token=$(INFISICAL_UNIVERSAL_AUTH_CLIENT_ID="$INFISICAL_MACHINE_IDENTITY_ID" INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET="$INFISICAL_MACHINE_IDENTITY_CLIENT_SECRET" infisical login --method=universal-auth --domain={shlex.quote(secrets.domain)} --plain)
 """
 
 
@@ -43,35 +51,40 @@ def _secrets_run_prefix(secrets: SecretsDefaults, paths: tuple[str, ...]) -> str
     """The `infisical run ... --` prefix for one command.
 
     Reuses the ``$infisical_token`` set by :func:`_secrets_login`, so this
-    can prefix any number of commands in the same script.
+    can prefix any number of commands in the same script. The token is
+    passed via ``INFISICAL_TOKEN=...`` env-var prefix rather than
+    ``--token`` for the same argv-exposure reason as :func:`_secrets_login`.
     """
     path_flags = " ".join(f"--path={shlex.quote(p)}" for p in paths)
     return (
-        f"infisical run --env={shlex.quote(secrets.environment)} {path_flags} "
-        f"--projectId={shlex.quote(secrets.project_id)} --domain={shlex.quote(secrets.domain)} "
-        f'--token "$infisical_token" -- '
+        f'INFISICAL_TOKEN="$infisical_token" infisical run --env={shlex.quote(secrets.environment)} {path_flags} '
+        f"--projectId={shlex.quote(secrets.project_id)} --domain={shlex.quote(secrets.domain)} -- "
     )
 
 
 def _wrapped_commands_block(
     secrets: SecretsDefaults | None,
-    paths: tuple[str, ...] | None,
-    *,
-    extra_commands: list[str],
-    final_command: str,
+    commands: list[tuple[str, tuple[str, ...] | None]],
 ) -> str:
     """Build the indented command sequence for the body of a `(...)` block.
 
-    ``extra_commands`` run in order before ``final_command`` (used by
-    :func:`render_up` for ``pre_up``). Every command is wrapped with the
-    same Infisical injection when the target has secrets configured
-    (``secrets`` and ``paths`` both set); `infisical login` is emitted at
-    most once regardless of how many commands there are.
+    ``commands`` is an ordered ``(command, paths)`` list. A command is
+    wrapped with Infisical injection scoped to its own ``paths`` when both
+    ``secrets`` and that command's ``paths`` are set -- this lets one
+    ``pre_up`` entry pull a narrower (or different) set of secrets than
+    the target's own ``up`` command, via :class:`wharf.config.PreUpStep`.
+    `infisical login` is emitted at most once regardless of how many
+    commands need secrets or how their ``paths`` differ: login only
+    establishes the machine identity's session token, which every
+    `infisical run --path=...` call reuses -- ``paths`` only controls
+    what each call injects, not what the token itself can authenticate.
     """
-    has_secrets = bool(secrets and paths)
+    has_secrets = secrets is not None and any(paths for _, paths in commands)
     login_lines = _secrets_login(secrets).rstrip("\n").splitlines() if has_secrets else []
-    run_prefix = _secrets_run_prefix(secrets, paths) if has_secrets else ""
-    command_lines = [f"{run_prefix}{cmd}" for cmd in (*extra_commands, final_command)]
+    command_lines = [
+        f"{_secrets_run_prefix(secrets, paths)}{cmd}" if (secrets and paths) else cmd
+        for cmd, paths in commands
+    ]
     return "\n".join(f"  {line}" for line in login_lines + command_lines)
 
 
@@ -82,7 +95,7 @@ def render_up(
     compose_file: str,
     secrets: SecretsDefaults | None,
     paths: tuple[str, ...] | None,
-    pre_up: tuple[str, ...] | None = None,
+    pre_up: tuple[PreUpStep, ...] | None = None,
 ) -> str:
     """Deploy action: checkout $REVISION, run pre_up hooks, build, start, prune old images.
 
@@ -99,16 +112,21 @@ def render_up(
     still attach to and drain that same stdin pipe, silently swallowing
     the rest of the script (including the final `up`) while the process
     still exits 0.
+
+    Each step's own ``paths`` (if set) scope its secrets injection
+    independently of the target's ``paths``, which is what the final
+    ``up`` command always uses.
     """
     pre_up_commands = [
-        f'docker compose -f "$compose_file" run --rm -T --build {shlex.quote(service)} </dev/null'
-        for service in (pre_up or ())
+        (
+            f'docker compose -f "$compose_file" run --rm -T --build {shlex.quote(step.service)} </dev/null',
+            step.paths if step.paths is not None else paths,
+        )
+        for step in (pre_up or ())
     ]
     commands_block = _wrapped_commands_block(
         secrets,
-        paths,
-        extra_commands=pre_up_commands,
-        final_command='docker compose -f "$compose_file" up -d --build --remove-orphans',
+        [*pre_up_commands, ('docker compose -f "$compose_file" up -d --build --remove-orphans', paths)],
     )
     return f"""\
 set -euo pipefail
@@ -178,10 +196,7 @@ def render_reload(
     check out a new revision, so there's nothing new to migrate.
     """
     commands_block = _wrapped_commands_block(
-        secrets,
-        paths,
-        extra_commands=[],
-        final_command='docker compose -f "$compose_file" up -d --remove-orphans',
+        secrets, [('docker compose -f "$compose_file" up -d --remove-orphans', paths)]
     )
     return f"""\
 set -euo pipefail

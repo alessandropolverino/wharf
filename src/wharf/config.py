@@ -87,6 +87,23 @@ class SecretsDefaults:
 
 
 @dataclass(frozen=True)
+class PreUpStep:
+    """One ``pre_up`` entry: a compose service, optionally with its own secret paths.
+
+    ``paths`` is ``None`` for the plain-string ``pre_up: [migrate]`` form --
+    that service is wrapped with the target's own ``paths`` (or not wrapped
+    at all if the target doesn't use secrets). Setting ``paths`` explicitly
+    scopes just that command to a narrower (or different) set of secret
+    paths than the target's ``up`` command gets, e.g. a migration that only
+    needs a `db` credential shouldn't also receive the app's runtime
+    secrets in its environment.
+    """
+
+    service: str
+    paths: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
 class Target:
     """A single deploy destination within a config file."""
 
@@ -100,12 +117,14 @@ class Target:
     healthcheck: str | None = None
     compose_file: str | None = None
     paths: tuple[str, ...] | None = None
-    pre_up: tuple[str, ...] | None = None
+    pre_up: tuple[PreUpStep, ...] | None = None
 
     @property
     def uses_secrets(self) -> bool:
-        """A target opts into secrets injection purely by declaring paths."""
-        return bool(self.paths)
+        """True if the target's own `up` or any `pre_up` step injects secrets."""
+        if self.paths:
+            return True
+        return any(step.paths for step in self.pre_up or ())
 
 
 @dataclass(frozen=True)
@@ -186,11 +205,12 @@ def _host_key(value: object, label: str) -> str:
     return text
 
 
-def _url(value: object, label: str) -> str:
+def _url(value: object, label: str, *, schemes: frozenset[str] = frozenset({"http", "https"})) -> str:
     text = _nonempty_string(value, label)
     parsed = urlparse(text)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ConfigError(f"{label} must be an HTTP or HTTPS URL")
+    if parsed.scheme not in schemes or not parsed.netloc:
+        allowed = "/".join(sorted(scheme.upper() for scheme in schemes))
+        raise ConfigError(f"{label} must be an {allowed} URL")
     return text
 
 
@@ -210,10 +230,25 @@ def _compose_service_name(value: object, label: str) -> str:
     return text
 
 
-def _compose_service_list(value: object, label: str) -> tuple[str, ...]:
+def _pre_up_step(value: object, index: int, label: str) -> PreUpStep:
+    """One `pre_up` list entry: either a bare service-name string (uses the
+    target's own `paths`), or a `{service, paths}` mapping that overrides
+    `paths` for just this command."""
+    item_label = f"{label}[{index}]"
+    if isinstance(value, str):
+        return PreUpStep(service=_compose_service_name(value, item_label))
+    _exact_keys(value, {"service"}, optional=frozenset({"paths"}), label=item_label)
+    assert isinstance(value, dict)
+    return PreUpStep(
+        service=_compose_service_name(value["service"], f"{item_label}.service"),
+        paths=_string_list(value["paths"], f"{item_label}.paths") if "paths" in value else None,
+    )
+
+
+def _pre_up_list(value: object, label: str) -> tuple[PreUpStep, ...]:
     if not isinstance(value, list) or not value:
         raise ConfigError(f"{label} must be a non-empty list of compose service names")
-    return tuple(_compose_service_name(item, f"{label}[{i}]") for i, item in enumerate(value))
+    return tuple(_pre_up_step(item, i, label) for i, item in enumerate(value))
 
 
 def _load_secrets_defaults(value: object) -> SecretsDefaults:
@@ -227,7 +262,10 @@ def _load_secrets_defaults(value: object) -> SecretsDefaults:
     return SecretsDefaults(
         provider=provider,
         project_id=_nonempty_string(value["project_id"], "secrets.project_id"),
-        domain=_url(value["domain"], "secrets.domain"),
+        # https-only: this URL is where the Infisical machine-identity
+        # credentials get sent (see remote_script._secrets_login) -- http
+        # would let them travel in plaintext.
+        domain=_url(value["domain"], "secrets.domain", schemes=frozenset({"https"})),
         environment=_nonempty_string(value["environment"], "secrets.environment"),
     )
 
@@ -240,10 +278,18 @@ def _load_target(value: object, index: int, *, secrets_configured: bool) -> Targ
     assert isinstance(value, dict)
 
     paths = _string_list(value["paths"], f"{label}.paths") if "paths" in value else None
-    if paths and not secrets_configured:
-        raise ConfigError(
-            f"{label} declares paths but no top-level secrets block is configured"
-        )
+    pre_up = _pre_up_list(value["pre_up"], f"{label}.pre_up") if "pre_up" in value else None
+
+    if not secrets_configured:
+        if paths:
+            raise ConfigError(
+                f"{label} declares paths but no top-level secrets block is configured"
+            )
+        for i, step in enumerate(pre_up or ()):
+            if step.paths:
+                raise ConfigError(
+                    f"{label}.pre_up[{i}] declares paths but no top-level secrets block is configured"
+                )
 
     return Target(
         name=_nonempty_string(value["name"], f"{label}.name"),
@@ -256,7 +302,7 @@ def _load_target(value: object, index: int, *, secrets_configured: bool) -> Targ
         healthcheck=_url(value["healthcheck"], f"{label}.healthcheck") if "healthcheck" in value else None,
         compose_file=_nonempty_string(value["compose_file"], f"{label}.compose_file") if "compose_file" in value else None,
         paths=paths,
-        pre_up=_compose_service_list(value["pre_up"], f"{label}.pre_up") if "pre_up" in value else None,
+        pre_up=pre_up,
     )
 
 

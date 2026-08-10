@@ -39,7 +39,10 @@ secrets:                                # optional. Omit entirely if no
   provider: infisical                   # required if `secrets:` present.
                                          # Currently the only supported value.
   project_id: e291cf43-50b5-...         # required. Infisical project ID.
-  domain: https://eu.infisical.com      # required. Infisical API domain.
+  domain: https://eu.infisical.com      # required. Infisical API domain,
+                                         # https only -- this is where the
+                                         # machine-identity credentials
+                                         # get sent.
   environment: prod                     # required. Infisical environment
                                          # slug (prod / staging / dev / ...).
 
@@ -69,15 +72,24 @@ targets:                                # required, non-empty list.
                                          # if and only if it sets `paths`
                                          # — requires a top-level
                                          # `secrets:` block to exist.
-    pre_up: [migrate, bootstrap]        # optional. Compose service names
+    pre_up:                              # optional. Compose service names
                                          # run via `docker compose run
                                          # --rm -T --build <service>
                                          # </dev/null`, in order, after
-                                         # checkout and before `up`.
-                                         # Wrapped with the same secrets
-                                         # injection as `up` when this
-                                         # target sets `paths`. Not run by
-                                         # `wharf reload`.
+                                         # checkout and before `up`. Not
+                                         # run by `wharf reload`.
+      - migrate                         # plain string: wrapped with this
+                                         # target's own `paths` (or not
+                                         # wrapped at all if the target
+                                         # doesn't set `paths`) -- same as
+                                         # `up`.
+      - service: bootstrap              # mapping form: overrides `paths`
+        paths: ["/svc/bootstrap/"]      # for just this one command, so it
+                                         # doesn't receive secrets the
+                                         # target's `up` command gets (or
+                                         # vice versa). Requires the same
+                                         # top-level `secrets:` block as
+                                         # `paths` does.
 ```
 
 `pre_up` requires a reasonably current Docker Compose v2 on the target

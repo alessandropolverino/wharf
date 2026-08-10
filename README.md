@@ -63,6 +63,10 @@ Run the exact same `wharf deploy deploy.yml` from a GitHub Actions
 workflow, see [docs/configuration.md](docs/configuration.md#running-from-ci)
 for the two-line workflow that does it.
 
+See [docs/how-it-works.md](docs/how-it-works.md) for the architecture
+and how wharf extends `docker compose`, or [docs/](docs/README.md) for
+the full docs index (config reference + per-file code reference).
+
 ## Commands
 
 | Command | What it does |
