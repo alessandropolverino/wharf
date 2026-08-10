@@ -108,10 +108,6 @@ def rotate(
         print(f"==> Rotating '{resolved_identity}' on {target.name} ({target.host}:{target.port})")
         _rotate_target(target, new_public_key, marker_pattern)
 
-    if live_private.exists():
-        live_private.unlink()
-    if live_public.exists():
-        live_public.unlink()
     staged_private.rename(live_private)
     staged_public.rename(live_public)
 
