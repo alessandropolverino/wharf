@@ -76,12 +76,17 @@ the full docs index (config reference + per-file code reference).
 | `wharf reload <config.yml>` | Re-run compose without rebuilding, picks up rotated secrets or just restarts. |
 | `wharf ls <config.yml>` | List a config's targets and their order, without connecting to anything. |
 | `wharf setup <config.yml>` | Bootstrap: generate a deploy keypair, create bare repos, authorize the key. |
+| `wharf rotate <config.yml>` | Replace an identity's deploy key everywhere, removing the old `authorized_keys` entry. |
+| `wharf identities` | List locally known deploy-key identities and their key files (local only). |
 
-All commands except `ls` accept `--only NAME` (repeatable) to act on a
-subset of targets, and `--repo NAME` to override the inferred project
-name. `deploy` also accepts `--revision SHA`. See
+All commands except `ls` and `identities` accept `--only NAME`
+(repeatable) to act on a subset of targets, `--repo NAME` to override
+the inferred project name, and `--identity NAME` to pick which named
+deploy-key identity to use (default: `ci` in CI, `default` otherwise).
+`deploy` also accepts `--revision SHA`. See
 [docs/configuration.md](docs/configuration.md) for the full config
-reference, worked examples, and how local vs. CI auth is handled.
+reference, worked examples, identities and rotation, and how local vs.
+CI auth is handled.
 
 Every command checks GitHub for a newer release first (skipped in CI,
 or anywhere with `WHARF_NO_UPDATE_CHECK` set) and prints a one-line

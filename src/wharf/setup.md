@@ -8,19 +8,25 @@ public half installed in each target's `authorized_keys`.
 It uses the **operator's own existing SSH access** (default
 agent/identity, prompts allowed) to provision targets — there's no
 chicken-and-egg problem, since you need working SSH access to a host
-already to set anything up on it. This is the only wharf command that
-doesn't use [`SessionAuth`](ssh.md)'s CI/batch logic for its own
-connection.
+already to set anything up on it. Like [`rotate.py`](rotate.md), it
+bypasses [`SessionAuth`](ssh.md)'s CI/batch resolution for its own
+connection — `--identity` picks which key gets *installed* or
+*rotated*, never which key authenticates the request making that
+change.
 
-## `ensure_deploy_keypair(key_dir=.wharf)`
+## `ensure_deploy_keypair(identity, key_dir=.wharf)`
 
-Shells out to `ssh-keygen -t ed25519` rather than adding a crypto
-library dependency — SSH is already a hard requirement. Idempotent: if
-`.wharf/deploy_key` already exists, it's left as-is and reused.
+Thin wrapper around [`identity.generate_keypair`](identity.md):
+idempotent (if the identity's key already exists, it's left as-is and
+reused), and prints which path it used. `identity == "default"` keeps
+writing to `.wharf/deploy_key` exactly as `wharf setup` has always done.
 
-## `setup(config, *, repo, only=())`
+## `setup(config, *, repo, only=(), identity=None, force_ci=None)`
 
-For each selected target, `_provision_target`:
+Resolves the identity (`identity.resolve_identity` — explicit
+`--identity`, else `"ci"` in CI, else `"default"`), ensures that
+identity's keypair exists, then for each selected target,
+`_provision_target`:
 
 1. Opens an interactive SSH session (`bash -s`) using the operator's own
    identity.

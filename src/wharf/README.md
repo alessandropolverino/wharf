@@ -13,9 +13,11 @@ For the config *schema* (what goes in `deploy.yml`), see
 | [`operations.md`](operations.md) | Orchestrates `deploy`/`down`/`reload` across a config's targets, sequentially. |
 | [`remote_script.md`](remote_script.md) | Renders the bash scripts that actually run on each target. |
 | [`ssh.md`](ssh.md) | SSH argv construction, host-key pinning, CI vs. local auth, subprocess execution. |
+| [`identity.md`](identity.md) | Named deploy-key identity resolution, on-disk key paths, and the `authorized_keys` marker used for rotation. |
 | [`git_ops.md`](git_ops.md) | `git push`es the deploy revision to a target's bare repo — wharf's registry substitute. |
 | [`healthcheck.md`](healthcheck.md) | Polls a target's `healthcheck` URL after `deploy`/`reload`. |
 | [`setup.md`](setup.md) | `wharf setup`: generates a deploy keypair, bootstraps bare repos and `authorized_keys`. |
+| [`rotate.md`](rotate.md) | `wharf rotate`: replaces an identity's deploy key without leaving the old one authorized. |
 | [`update_check.md`](update_check.md) | Best-effort "a newer wharf release exists" notice. |
 | [`__init__.md`](__init__.md) | Package version. |
 | [`__main__.md`](__main__.md) | `python -m wharf` entry point. |
@@ -25,13 +27,19 @@ For the config *schema* (what goes in `deploy.yml`), see
 ```
 cli.py
  ├─ config.py            (load_config)
+ ├─ identity.py           list_identities
  ├─ operations.py         deploy / down / reload
  │   ├─ config.py         (select_targets, compose_file_for, render_repo_template)
  │   ├─ git_ops.py         push_revision  ──┐
  │   ├─ remote_script.py   render_up/down/reload
  │   ├─ ssh.py              SessionAuth, run_remote_script  ◄┘ (both go over SSH)
+ │   │   └─ identity.py     key_paths, resolve_identity (named-identity local auth)
  │   └─ healthcheck.py      wait_healthy
  ├─ setup.py               setup
+ │   ├─ identity.py         key_paths, key_comment, generate_keypair, resolve_identity
+ │   └─ ssh.py              SessionAuth, build_ssh_argv, run_streaming
+ ├─ rotate.py               rotate
+ │   ├─ identity.py         key_paths, key_comment, staged_key_paths, generate_keypair, resolve_identity
  │   └─ ssh.py              SessionAuth, build_ssh_argv, run_streaming
  └─ update_check.py        check_for_update
 ```
@@ -39,5 +47,5 @@ cli.py
 Nothing in this package talks to Docker, Infisical, or a target host
 directly except through `ssh.py`'s `run_streaming`/`run_remote_script` —
 every remote effect is a bash script rendered by `remote_script.py` (or,
-for `setup`, an inline script in `setup.py`) piped over one SSH
-connection.
+for `setup`/`rotate`, an inline script in `setup.py`/`rotate.py`) piped
+over one SSH connection.

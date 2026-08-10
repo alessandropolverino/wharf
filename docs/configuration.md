@@ -333,22 +333,72 @@ all wharf needs. The same `DEPLOY_SSH_KEY` secret works for `down` and
 tied to a specific command.
 
 Repeat steps 1-2 per config file if you deploy more than one environment
-(`deploy.yml`, `deploy.staging.yml`, ...) from CI -- each currently shares
-the same `.wharf/deploy_key` on disk, so re-running `wharf setup` for a
-second config file against the same checkout won't generate a second key.
+(`deploy.yml`, `deploy.staging.yml`, ...) from CI. By default they'd
+share one `"ci"` identity (and so one key) since identity key files live
+under `.wharf/` at the project root, not per config file — name each
+environment's identity explicitly if you want them independently
+rotatable, e.g. `wharf setup deploy.yml --identity ci-prod` and `wharf
+setup deploy.staging.yml --identity ci-staging`, with each `DEPLOY_SSH_KEY`
+secret set in that environment's own CI configuration.
+
+## Identities and rotation
+
+Every deploy key belongs to a named **identity**. `--identity NAME` on
+`setup`, `rotate`, `deploy`, `down`, or `reload` picks which one;
+without it, wharf uses `"ci"` when running in CI and `"default"`
+otherwise — `"default"` is exactly the single key `wharf setup` has
+always generated, so nothing changes if you never pass `--identity`.
+
+```
+wharf setup deploy.yml --identity ci-staging   # generate/provision a named identity
+wharf rotate deploy.yml --identity ci-staging  # replace that identity's key everywhere,
+                                                # removing the old authorized_keys entry
+wharf identities                               # list identities with a local key file
+```
+
+`wharf rotate` always produces a new key and removes the old one from
+every target's `authorized_keys` -- unlike `setup`, which only ever
+appends. It's safe to re-run if interrupted partway: already-rotated
+targets keep the new key, not-yet-rotated targets keep the old one
+until you run it again.
+
+`wharf identities` reads only local key files under `.wharf/` -- it does
+not check what's actually authorized on any target.
+
+### Moving from a single shared key to a named identity
+
+If you're already running `wharf setup` with no `--identity` (the
+`"default"` identity) and want to name it going forward -- e.g. so it's
+independently rotatable from some other automation later -- that's a
+manual, one-time move, not something `rotate` itself does (`rotate`
+only replaces a key *within* the same identity, it doesn't rename one
+identity into another):
+
+1. `wharf setup deploy.yml --identity ci` -- additive, installs the new
+   key alongside the old one.
+2. Update your CI secret to the new key's contents.
+3. Confirm a real CI deploy succeeds with the new key.
+4. Manually remove the old `wharf-deploy`-commented line from each
+   target's `authorized_keys`, and delete `.wharf/deploy_key` locally.
 
 ## Local vs. CI auth
 
 wharf picks its SSH auth mode from the `CI` environment variable
 (override with `--ci` / `--interactive` on any command):
 
-- **Local (not CI):** no `BatchMode`, no explicit identity file — SSH
-  uses your normal agent/default identity, and passphrase or password
+- **Local (not CI):** no `BatchMode`. With no `--identity` (or
+  `--identity default`), no explicit identity file either — SSH uses
+  your normal agent/default identity, and passphrase or password
   prompts work exactly as they would typing the `ssh` command yourself.
+  Any other `--identity NAME` uses that identity's own local key file
+  instead (see "Identities and rotation" above), still with prompts
+  allowed.
 - **CI:** `BatchMode=yes` and an identity file written from the
   `DEPLOY_SSH_KEY` environment variable (the private key `wharf setup`
   generates). Nothing can be prompted for on a CI runner, so the key
-  must be fully usable non-interactively — no passphrase.
+  must be fully usable non-interactively — no passphrase. `--identity`
+  has no effect in CI: whichever identity you name, wharf still reads
+  the one `DEPLOY_SSH_KEY` secret set in that job's environment.
 
 ## Secrets
 
