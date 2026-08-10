@@ -21,7 +21,7 @@ goes through two building blocks defined here:
 
 `SessionAuth.resolve(force_ci=None, identity=None)` picks the mode:
 `force_ci` (the CLI's `--ci`/`--interactive` flags) overrides
-autodetection via [`is_ci()`](#is_ci), which checks the standard `CI`
+autodetection via `is_ci()`, which checks the standard `CI`
 env var GitHub Actions and most other CI systems set automatically.
 `identity` (see [`identity.md`](identity.md)) only matters for **local**
 runs: the `"default"` identity (or no identity) keeps using the ambient

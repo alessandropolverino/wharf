@@ -47,7 +47,7 @@ uses.
    - `deploy`/`down`/`reload` load the config, resolve `--repo` and the
      CI/local auth mode, then call the matching
      [`operations`](operations.md) function through `_run_operation`.
-3. Before dispatching (except for `ls`), a best-effort, silent-on-failure
+3. Before dispatching (except for `ls` and `identities`), a best-effort, silent-on-failure
    [`update_check`](update_check.md) runs — skipped in CI and when
    `WHARF_NO_UPDATE_CHECK` is set, so it never adds an unexpected network
    call where one isn't wanted.
