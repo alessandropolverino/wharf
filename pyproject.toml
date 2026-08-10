@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wharf"
-version = "0.1.1"
+version = "0.2.0"
 description = "Deploy-as-code for docker compose projects over SSH, no container registry required."
 readme = "README.md"
 requires-python = ">=3.10"
