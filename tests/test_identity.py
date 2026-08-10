@@ -80,3 +80,40 @@ def test_generate_keypair_creates_parent_dir_and_ed25519_key(tmp_path):
     assert public_key.read_text().strip().endswith("wharf:ci")
     result = subprocess.run(["ssh-keygen", "-lf", str(public_key)], capture_output=True, text=True, check=True)
     assert "ED25519" in result.stdout
+
+
+from wharf.identity import IdentityInfo, list_identities
+
+
+def test_list_identities_empty_when_no_wharf_dir(tmp_path):
+    assert list_identities(tmp_path / ".wharf") == []
+
+
+def test_list_identities_finds_default_and_named_keys(tmp_path):
+    key_dir = tmp_path / ".wharf"
+    default_private, _ = key_paths(DEFAULT_IDENTITY, key_dir)
+    generate_keypair(default_private, key_comment(DEFAULT_IDENTITY))
+    ci_private, _ = key_paths("ci", key_dir)
+    generate_keypair(ci_private, key_comment("ci"))
+
+    identities = list_identities(key_dir)
+
+    assert {info.name for info in identities} == {"default", "ci"}
+    by_name = {info.name: info for info in identities}
+    assert by_name["default"].private_key == default_private
+    assert by_name["default"].comment == "wharf-deploy"
+    assert by_name["ci"].comment == "wharf:ci"
+    assert by_name["default"].staged_pending is False
+
+
+def test_list_identities_flags_staged_pending_rotation(tmp_path):
+    key_dir = tmp_path / ".wharf"
+    ci_private, _ = key_paths("ci", key_dir)
+    generate_keypair(ci_private, key_comment("ci"))
+    staged_private, staged_public = staged_key_paths(ci_private)
+    staged_private.write_text("fake private key material")
+    staged_public.write_text("fake public key material")
+
+    [info] = list_identities(key_dir)
+
+    assert info.staged_pending is True

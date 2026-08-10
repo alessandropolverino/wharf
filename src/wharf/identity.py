@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_IDENTITY = "default"
@@ -98,3 +99,48 @@ def generate_keypair(private_key: Path, comment: str) -> None:
         ],
         check=True,
     )
+
+
+@dataclass(frozen=True)
+class IdentityInfo:
+    """One identity's local key-file state, as reported by `wharf identities`."""
+
+    name: str
+    private_key: Path
+    public_key: Path
+    comment: str
+    staged_pending: bool
+
+
+def _identity_info(name: str, private_key: Path, public_key: Path) -> IdentityInfo:
+    staged_private, _ = staged_key_paths(private_key)
+    return IdentityInfo(
+        name=name,
+        private_key=private_key,
+        public_key=public_key,
+        comment=key_comment(name),
+        staged_pending=staged_private.exists(),
+    )
+
+
+def list_identities(key_dir: Path = DEFAULT_KEY_DIR) -> list[IdentityInfo]:
+    """Every identity with a local key file: `default` (if present) plus
+    every named identity under `.wharf/keys/`.
+
+    Local-only by design -- reads nothing but the current checkout's
+    disk, never SSHes anywhere. See `wharf identities --help`.
+    """
+    found: list[IdentityInfo] = []
+
+    default_private, default_public = key_paths(DEFAULT_IDENTITY, key_dir)
+    if default_private.exists():
+        found.append(_identity_info(DEFAULT_IDENTITY, default_private, default_public))
+
+    keys_dir = key_dir / "keys"
+    if keys_dir.is_dir():
+        for public in sorted(keys_dir.glob("*_key.pub")):
+            private = public.with_name(public.name[: -len(".pub")])
+            name = private.name[: -len("_key")]
+            found.append(_identity_info(name, private, public))
+
+    return found
