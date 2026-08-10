@@ -117,3 +117,32 @@ def test_list_identities_flags_staged_pending_rotation(tmp_path):
     [info] = list_identities(key_dir)
 
     assert info.staged_pending is True
+
+
+def test_list_identities_includes_named_key_when_public_missing(tmp_path):
+    """Named identity with private key but missing .pub should still be listed,
+    mirroring default identity behavior."""
+    key_dir = tmp_path / ".wharf"
+    ci_private, ci_public = key_paths("ci", key_dir)
+    generate_keypair(ci_private, key_comment("ci"))
+    # Delete the public key file
+    ci_public.unlink()
+
+    [info] = list_identities(key_dir)
+
+    assert info.name == "ci"
+    assert info.private_key == ci_private
+    assert info.public_key == ci_public  # Path is recorded even if file doesn't exist
+
+
+def test_list_identities_excludes_named_key_when_private_missing(tmp_path):
+    """Named identity with .pub but missing private key should NOT be listed."""
+    key_dir = tmp_path / ".wharf"
+    ci_private, ci_public = key_paths("ci", key_dir)
+    generate_keypair(ci_private, key_comment("ci"))
+    # Delete only the private key file
+    ci_private.unlink()
+
+    identities = list_identities(key_dir)
+
+    assert identities == []  # Should not be listed

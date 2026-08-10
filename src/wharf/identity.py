@@ -138,8 +138,11 @@ def list_identities(key_dir: Path = DEFAULT_KEY_DIR) -> list[IdentityInfo]:
 
     keys_dir = key_dir / "keys"
     if keys_dir.is_dir():
-        for public in sorted(keys_dir.glob("*_key.pub")):
-            private = public.with_name(public.name[: -len(".pub")])
+        for private in sorted(keys_dir.glob("*_key")):
+            # Skip staged keys (.new, .new.pub) which are tracked separately
+            if private.name.endswith(".new") or private.name.endswith(".pub"):
+                continue
+            public = private.with_name(private.name + ".pub")
             name = private.name[: -len("_key")]
             found.append(_identity_info(name, private, public))
 
