@@ -1,3 +1,5 @@
+import pytest
+
 from wharf.config import Target
 from wharf.ssh import SessionAuth, build_git_ssh_command, build_ssh_argv
 
@@ -28,3 +30,40 @@ def test_build_git_ssh_command_excludes_destination():
     command = build_git_ssh_command(TARGET, AUTH)
     assert "deploy@203.0.113.10" not in command
     assert command.startswith("ssh -p 2222")
+
+
+def test_resolve_local_default_identity_uses_ambient_agent(monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
+    auth = SessionAuth.resolve(force_ci=False)
+    assert auth.batch is False
+    assert auth.identity_file is None
+
+
+def test_resolve_local_named_identity_uses_its_own_key_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    key_file = tmp_path / ".wharf" / "keys" / "release-bot_key"
+    key_file.parent.mkdir(parents=True)
+    key_file.write_text("fake private key material")
+
+    auth = SessionAuth.resolve(force_ci=False, identity="release-bot")
+
+    assert auth.batch is False
+    assert auth.identity_file == key_file
+
+
+def test_resolve_local_named_identity_without_key_file_raises(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(RuntimeError, match="release-bot"):
+        SessionAuth.resolve(force_ci=False, identity="release-bot")
+
+
+def test_resolve_ci_ignores_identity_name_reads_same_env_var(monkeypatch):
+    monkeypatch.setenv("DEPLOY_SSH_KEY", "fake-private-key-content\n")
+
+    auth_default = SessionAuth.resolve(force_ci=True)
+    auth_named = SessionAuth.resolve(force_ci=True, identity="release-bot")
+
+    assert auth_default.batch is True and auth_named.batch is True
+    assert auth_default.identity_file is not None
+    assert auth_named.identity_file is not None
+    assert auth_default.identity_file.read_text() == auth_named.identity_file.read_text()

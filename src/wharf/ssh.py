@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Target
+from .identity import DEFAULT_IDENTITY, key_paths, resolve_identity
 
 
 class RemoteCommandError(RuntimeError):
@@ -67,16 +68,31 @@ class SessionAuth:
     identity_file: Path | None = None
 
     @classmethod
-    def resolve(cls, *, force_ci: bool | None = None) -> "SessionAuth":
+    def resolve(cls, *, force_ci: bool | None = None, identity: str | None = None) -> "SessionAuth":
         """Decide the auth mode for this run.
 
         ``force_ci`` overrides autodetection -- this is what the CLI's
-        ``--ci``/``--interactive`` flags set. Left as None, autodetection
-        via :func:`is_ci` applies.
+        ``--ci``/``--interactive`` flags set. ``identity`` selects which
+        named identity's key to use for a *local* run; it has no effect
+        on CI's own auth, which always reads ``DEPLOY_SSH_KEY``
+        regardless of which identity that secret happens to belong to
+        (a CI job only ever has one secret populated per run).
         """
         ci = is_ci() if force_ci is None else force_ci
+        resolved_identity = resolve_identity(identity, is_ci=ci)
+
         if not ci:
-            return cls(batch=False, identity_file=None)
+            if resolved_identity == DEFAULT_IDENTITY:
+                return cls(batch=False, identity_file=None)
+            private_key, _ = key_paths(resolved_identity)
+            if not private_key.exists():
+                raise RuntimeError(
+                    f"identity '{resolved_identity}' has no local key at {private_key} "
+                    f"(run `wharf setup --identity {resolved_identity}` first)"
+                )
+            # Resolved to absolute: identity_file is handed to `ssh -i` at
+            # invocation time, which may be after further cwd changes.
+            return cls(batch=False, identity_file=private_key.resolve())
 
         key_material = os.environ.get("DEPLOY_SSH_KEY")
         if not key_material:
