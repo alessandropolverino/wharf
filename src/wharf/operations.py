@@ -101,14 +101,15 @@ def deploy(
     revision: str,
     only: tuple[str, ...] = (),
     force_ci: bool | None = None,
+    identity: str | None = None,
 ) -> None:
     """Push, checkout, build, and healthcheck each selected target in order."""
     _check_branch(config)
     for target in config.select_targets(only):
         print(f"==> Deploying {target.name} ({target.host}:{target.port})")
-        auth = SessionAuth.resolve(force_ci=force_ci)
         remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
         try:
+            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
             push_revision(target, remote_repo, config.branch, revision, auth)
             script = render_up(
                 remote_repo=remote_repo,
@@ -135,14 +136,15 @@ def down(
     only: tuple[str, ...] = (),
     volumes: bool = False,
     force_ci: bool | None = None,
+    identity: str | None = None,
 ) -> None:
     """Stop (and optionally wipe volumes for) each selected target."""
     _check_branch(config)
     for target in config.select_targets(only):
         print(f"==> Stopping {target.name} ({target.host}:{target.port})")
-        auth = SessionAuth.resolve(force_ci=force_ci)
         _, remote_dir = _remote_repo_and_dir(config, target, repo)
         try:
+            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
             script = render_down(
                 remote_dir=remote_dir,
                 compose_file=config.compose_file_for(target),
@@ -162,14 +164,15 @@ def reload(
     repo: str,
     only: tuple[str, ...] = (),
     force_ci: bool | None = None,
+    identity: str | None = None,
 ) -> None:
     """Re-apply compose (no rebuild) for each selected target."""
     _check_branch(config)
     for target in config.select_targets(only):
         print(f"==> Reloading {target.name} ({target.host}:{target.port})")
-        auth = SessionAuth.resolve(force_ci=force_ci)
         _, remote_dir = _remote_repo_and_dir(config, target, repo)
         try:
+            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
             script = render_reload(
                 remote_dir=remote_dir,
                 compose_file=config.compose_file_for(target),
