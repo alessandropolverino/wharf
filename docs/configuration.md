@@ -274,7 +274,39 @@ wharf deploy deploy.staging.yml    # staging
 
 Any CI system that sets the standard `CI` environment variable (GitHub
 Actions, GitLab CI, CircleCI, ... all do this automatically) is detected
-by wharf without any extra flags. A minimal GitHub Actions job:
+by wharf without any extra flags. Getting a config wired up to GitHub
+Actions is three steps:
+
+### 1. Bootstrap the deploy key
+
+From your own machine, with your own existing SSH access to each target:
+
+```
+wharf setup deploy.yml
+```
+
+This generates an ed25519 keypair at `.wharf/deploy_key` (already covered
+by the repo's `.gitignore` -- never commit it), creates each target's bare
+repo, and appends the new public key to each target's
+`~/.ssh/authorized_keys`. Re-running it is safe: an existing key is left
+as-is, and a target that's already authorized is skipped.
+
+### 2. Hand the private key to GitHub
+
+```
+gh secret set DEPLOY_SSH_KEY < .wharf/deploy_key
+```
+
+(No `gh` CLI? Paste the file's contents into **Settings → Secrets and
+variables → Actions → New repository secret**, named `DEPLOY_SSH_KEY`,
+instead.) wharf deliberately stops here and prints this as an instruction
+rather than shelling out to `gh` itself -- reaching into your CI
+provider's secret store on your behalf is more than a bootstrap command
+should do.
+
+### 3. Add the workflow
+
+A minimal GitHub Actions job:
 
 ```yaml
 name: Deploy to production
@@ -296,7 +328,14 @@ jobs:
 That's the entire workflow — no separate "load targets" step, no
 `TARGETS_JSON` env var round-trip. `deploy.yml`'s targets, `--repo`
 (inferred from the checkout), and `HEAD` (inferred as the revision) are
-all wharf needs.
+all wharf needs. The same `DEPLOY_SSH_KEY` secret works for `down` and
+`reload` jobs too, if you add them -- it's read from the environment, not
+tied to a specific command.
+
+Repeat steps 1-2 per config file if you deploy more than one environment
+(`deploy.yml`, `deploy.staging.yml`, ...) from CI -- each currently shares
+the same `.wharf/deploy_key` on disk, so re-running `wharf setup` for a
+second config file against the same checkout won't generate a second key.
 
 ## Local vs. CI auth
 

@@ -61,7 +61,7 @@ wharf reload deploy.yml
 
 Run the exact same `wharf deploy deploy.yml` from a GitHub Actions
 workflow, see [docs/configuration.md](docs/configuration.md#running-from-ci)
-for the two-line workflow that does it.
+for the full setup-key-to-workflow walkthrough.
 
 See [docs/how-it-works.md](docs/how-it-works.md) for the architecture
 and how wharf extends `docker compose`, or [docs/](docs/README.md) for
