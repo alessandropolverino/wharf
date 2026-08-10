@@ -16,38 +16,36 @@ magic than a bootstrap command should have.
 from __future__ import annotations
 
 import shlex
-import subprocess
 from pathlib import Path
 
 from .config import Config, Target, render_repo_template
+from .identity import (
+    DEFAULT_KEY_DIR,
+    generate_keypair,
+    key_comment,
+    key_paths,
+    resolve_identity,
+)
 from .operations import _check_branch
-from .ssh import SessionAuth, build_ssh_argv, run_streaming
-
-DEFAULT_KEY_DIR = Path(".wharf")
-DEFAULT_KEY_NAME = "deploy_key"
+from .ssh import SessionAuth, build_ssh_argv, is_ci, run_streaming
 
 
-def ensure_deploy_keypair(key_dir: Path = DEFAULT_KEY_DIR) -> tuple[Path, Path]:
-    """Generate an ed25519 deploy keypair if one doesn't already exist.
+def ensure_deploy_keypair(identity: str, key_dir: Path = DEFAULT_KEY_DIR) -> tuple[Path, Path]:
+    """Generate an ed25519 deploy keypair for `identity` if one doesn't
+    already exist.
 
-    Shells out to `ssh-keygen` rather than adding a crypto library
-    dependency -- it's already required to have SSH installed at all.
+    `identity="default"` keeps writing to `.wharf/deploy_key`, exactly
+    as `wharf setup` has always done, for anyone who never names an
+    identity. Other identities get their own file under `.wharf/keys/`
+    (see `identity.key_paths`).
     """
-    key_dir.mkdir(parents=True, exist_ok=True)
-    private_key = key_dir / DEFAULT_KEY_NAME
-    public_key = key_dir / f"{DEFAULT_KEY_NAME}.pub"
+    private_key, public_key = key_paths(identity, key_dir)
     if private_key.exists():
-        print(f"Deploy key already exists at {private_key}, leaving it as-is.")
+        print(f"Deploy key for identity '{identity}' already exists at {private_key}, leaving it as-is.")
         return private_key, public_key
 
-    subprocess.run(
-        [
-            "ssh-keygen", "-t", "ed25519", "-N", "", "-C", "wharf-deploy",
-            "-f", str(private_key),
-        ],
-        check=True,
-    )
-    print(f"Generated deploy keypair at {private_key}")
+    generate_keypair(private_key, key_comment(identity))
+    print(f"Generated deploy keypair for identity '{identity}' at {private_key}")
     return private_key, public_key
 
 
@@ -91,10 +89,19 @@ fi
     )
 
 
-def setup(config: Config, *, repo: str, only: tuple[str, ...] = ()) -> None:
+def setup(
+    config: Config,
+    *,
+    repo: str,
+    only: tuple[str, ...] = (),
+    identity: str | None = None,
+    force_ci: bool | None = None,
+) -> None:
     """Bootstrap every selected target: bare repo, remote dir, deploy key."""
     _check_branch(config)
-    private_key, public_key_path = ensure_deploy_keypair()
+    ci = is_ci() if force_ci is None else force_ci
+    resolved_identity = resolve_identity(identity, is_ci=ci)
+    private_key, public_key_path = ensure_deploy_keypair(resolved_identity)
     public_key = public_key_path.read_text().strip()
 
     for target in config.select_targets(only):
