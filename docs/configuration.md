@@ -348,6 +348,9 @@ Every deploy key belongs to a named **identity**. `--identity NAME` on
 without it, wharf uses `"ci"` when running in CI and `"default"`
 otherwise — `"default"` is exactly the single key `wharf setup` has
 always generated, so nothing changes if you never pass `--identity`.
+That no-migration guarantee is for local runs specifically: running
+`wharf setup` under CI (`CI=true`) with no `--identity` resolves to the
+`"ci"` identity, not `"default"`.
 
 ```
 wharf setup deploy.yml --identity ci-staging   # generate/provision a named identity
@@ -361,6 +364,12 @@ every target's `authorized_keys` -- unlike `setup`, which only ever
 appends. It's safe to re-run if interrupted partway: already-rotated
 targets keep the new key, not-yet-rotated targets keep the old one
 until you run it again.
+
+`wharf rotate --only TARGET` promotes the new key to the local live key
+file as soon as the selected target(s) confirm the swap, even though
+targets you didn't select still only trust the old key -- run `rotate`
+again (with `--only` for the rest, or with no `--only` at all) before
+deploying to those targets, or they'll reject the now-local key.
 
 `wharf identities` reads only local key files under `.wharf/` -- it does
 not check what's actually authorized on any target.
@@ -379,7 +388,8 @@ identity into another):
 2. Update your CI secret to the new key's contents.
 3. Confirm a real CI deploy succeeds with the new key.
 4. Manually remove the old `wharf-deploy`-commented line from each
-   target's `authorized_keys`, and delete `.wharf/deploy_key` locally.
+   target's `authorized_keys`, and delete `.wharf/deploy_key` and
+   `.wharf/deploy_key.pub` locally.
 
 ## Local vs. CI auth
 

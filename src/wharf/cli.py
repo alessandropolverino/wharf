@@ -25,7 +25,7 @@ import yaml
 
 from . import operations, rotate as rotate_mod, setup as setup_mod
 from .config import Config, ConfigError, load_config
-from .identity import list_identities
+from .identity import InvalidIdentityError, list_identities, validate_identity_name
 from .operations import BranchMismatchError, OperationError
 from .ssh import RemoteCommandError, is_ci
 from .update_check import check_for_update
@@ -120,9 +120,12 @@ def _load(config_path: Path) -> Config:
 
 
 def _fingerprint(public_key: Path) -> str:
-    result = subprocess.run(
-        ["ssh-keygen", "-lf", str(public_key)], capture_output=True, text=True, check=True,
-    )
+    try:
+        result = subprocess.run(
+            ["ssh-keygen", "-lf", str(public_key)], capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "(no public key)"
     # ssh-keygen -lf prints "<bits> <fingerprint> <comment> (<type>)"
     return result.stdout.split()[1]
 
@@ -147,6 +150,13 @@ def _run_operation(fn, *args, **kwargs) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if getattr(args, "identity", None) is not None:
+        try:
+            validate_identity_name(args.identity)
+        except InvalidIdentityError as exc:
+            print(f"wharf: {exc}", file=sys.stderr)
+            return 2
 
     if args.command == "ls":
         config = _load(args.config)

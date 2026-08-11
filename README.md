@@ -88,10 +88,10 @@ deploy-key identity to use (default: `ci` in CI, `default` otherwise).
 reference, worked examples, identities and rotation, and how local vs.
 CI auth is handled.
 
-Every command checks GitHub for a newer release first (skipped in CI,
-or anywhere with `WHARF_NO_UPDATE_CHECK` set) and prints a one-line
-notice if one exists -- it never downloads or installs anything on its
-own.
+Every command except `ls` and `identities` checks GitHub for a newer
+release first (skipped in CI, or anywhere with `WHARF_NO_UPDATE_CHECK`
+set) and prints a one-line notice if one exists -- it never downloads
+or installs anything on its own.
 
 ## Design notes
 

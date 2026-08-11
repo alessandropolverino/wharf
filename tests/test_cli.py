@@ -1,6 +1,33 @@
 from pathlib import Path
 
-from wharf.cli import build_parser
+from wharf.cli import build_parser, main
+from wharf.identity import generate_keypair, key_comment, key_paths
+
+
+def test_identities_reports_missing_public_key_instead_of_crashing(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CI", raising=False)
+    private, public = key_paths("release-bot", tmp_path / ".wharf")
+    generate_keypair(private, key_comment("release-bot"))
+    public.unlink()
+
+    exit_code = main(["identities"])
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "(no public key)" in out
+    assert "Traceback" not in out
+
+
+def test_setup_with_invalid_identity_exits_cleanly(monkeypatch, capsys):
+    monkeypatch.delenv("CI", raising=False)
+
+    exit_code = main(["setup", "deploy.yml", "--identity", "Bad_Name"])
+
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "Bad_Name" in err
+    assert "Traceback" not in err
 
 
 def test_setup_accepts_identity_and_ci_flags():
