@@ -322,7 +322,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - run: pipx run "wharf @ git+https://github.com/alessandropolverino/wharf.git@v0.2.0" deploy deploy.yml
+      - run: pipx run "wharf @ git+https://github.com/alessandropolverino/wharf.git@v0.3.0" deploy deploy.yml
 ```
 
 That's the entire workflow — no separate "load targets" step, no
