@@ -64,6 +64,29 @@ def test_rotate_script_replaces_old_key_without_touching_other_identities(tmp_pa
     assert unrelated_human_key in lines
 
 
+def test_rotate_script_aborts_on_real_grep_failure_without_destroying_keys(tmp_path, monkeypatch):
+    """A real grep error (exit >= 2, e.g. "Is a directory") must abort the
+    script under `set -e` rather than being swallowed like the benign
+    "no lines matched" exit-1 case -- otherwise an empty temp file would
+    get `mv`-ed over authorized_keys, destroying every key on the host."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir()
+    # A directory in place of authorized_keys makes `grep` exit 2 (GNU
+    # grep's "Is a directory" error), simulating a real grep failure that
+    # isn't the benign "no lines selected" exit-1 case.
+    (ssh_dir / "authorized_keys").mkdir()
+    new_key = "ssh-ed25519 AAAANEW wharf:ci"
+    script = _render_rotate_script(new_key, " wharf:ci$", "app")
+
+    result = subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True)
+
+    assert result.returncode != 0
+    # authorized_keys must still be the untouched directory, not
+    # replaced by a (possibly empty) file.
+    assert (ssh_dir / "authorized_keys").is_dir()
+
+
 def test_rotate_script_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / ".ssh").mkdir()

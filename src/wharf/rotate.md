@@ -20,14 +20,19 @@ idempotency `setup.ensure_deploy_keypair` already uses.
 `_render_rotate_script` builds one script per target: filter every
 `authorized_keys` line matching the identity's marker pattern (its
 `identity.key_comment`, anchored as `" <comment>$"` so e.g. `wharf:ci`
-can never match a sibling `wharf:ci-staging` line) out to a temp file,
-unconditionally append the new key, then atomically `mv` the temp file
-over `authorized_keys`. Filtering and re-appending in one pass — rather
-than adding the new key and separately removing the old one — means
-there's never an intermediate write where the live file has neither
-key, and running the same script twice converges to the same state (the
-new key's own line also carries the marker, so it gets filtered out and
-unconditionally re-added on every run).
+can never match a sibling `wharf:ci-staging` line) out to a temp file
+created by `mktemp` *inside* `~/.ssh` itself, unconditionally append the
+new key, then atomically `mv` the temp file over `authorized_keys`.
+Staging the temp file in the same directory as the target (rather than
+the default `/tmp`) is what makes that `mv` an atomic same-filesystem
+rename instead of a cross-device copy+unlink, and lets the file inherit
+`~/.ssh`'s permissions/SELinux context instead of `/tmp`'s. Filtering
+and re-appending in one pass — rather than adding the new key and
+separately removing the old one — means there's never an intermediate
+write where the live file has neither key, and running the same script
+twice converges to the same state (the new key's own line also carries
+the marker, so it gets filtered out and unconditionally re-added on
+every run).
 
 `_rotate_target` runs that script over `SessionAuth(batch=False)` — the
 operator's own identity, same as `setup._provision_target` — never the

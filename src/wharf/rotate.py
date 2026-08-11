@@ -12,7 +12,7 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-from .config import Config, Target, render_repo_template
+from .config import Config, Target
 from .identity import (
     DEFAULT_KEY_DIR,
     generate_keypair,
@@ -55,6 +55,17 @@ def _render_rotate_script(new_public_key: str, marker_pattern: str, target_name:
     metacharacters needing escaping -- identity names are restricted to
     `[a-z0-9-]` by `identity.validate_identity_name`, so ` wharf:<name>$`
     is always safe to use unescaped.
+
+    The temp file is created with `mktemp` *inside* `~/.ssh` (not the
+    default `/tmp`) so the final `mv` is a same-filesystem rename: a true
+    atomic replace rather than a cross-device copy+unlink that could
+    leave `authorized_keys` truncated if interrupted, and the file
+    inherits `~/.ssh`'s permissions/SELinux context instead of `/tmp`'s
+    (which would make sshd refuse to read it on SELinux-enforcing
+    hosts). `grep -v`'s exit code 1 ("no lines matched", i.e. nothing to
+    filter) is the only failure tolerated -- any other exit code aborts
+    the script under `set -e` rather than risk `mv`-ing an empty or
+    partial file over the live one.
     """
     new_public_key_q = shlex.quote(new_public_key)
     marker_pattern_q = shlex.quote(marker_pattern)
@@ -63,11 +74,11 @@ def _render_rotate_script(new_public_key: str, marker_pattern: str, target_name:
 set -euo pipefail
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
 touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-tmp_file=$(mktemp)
-grep -v -- {marker_pattern_q} ~/.ssh/authorized_keys > "$tmp_file" || true
+tmp_file=$(mktemp ~/.ssh/authorized_keys.XXXXXX)
+grep -v -- {marker_pattern_q} ~/.ssh/authorized_keys > "$tmp_file" || [ $? -eq 1 ]
 echo {new_public_key_q} >> "$tmp_file"
+chmod 600 "$tmp_file"
 mv "$tmp_file" ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
 echo "Rotated deploy key on" {target_name_q}
 """
 
@@ -113,5 +124,5 @@ def rotate(
 
     print()
     print("Rotation complete. Remaining manual step:")
-    print(f"  Update your CI's DEPLOY_SSH_KEY secret with the new key, e.g.:")
+    print("  Update your CI's DEPLOY_SSH_KEY secret with the new key, e.g.:")
     print(f"    gh secret set DEPLOY_SSH_KEY < {live_private}")
