@@ -23,7 +23,9 @@ In order:
    [Locking](#locking)).
 2. Record the currently-running image IDs (for cleanup at the end).
 3. `git checkout -f $REVISION` into `remote_dir` from the bare repo
-   pushed by [`git_ops.md`](git_ops.md).
+   pushed by [`git_ops.md`](git_ops.md). The checkout is always a
+   detached HEAD, so it runs with `-c advice.detachedHead=false` to keep
+   git's multi-paragraph advice out of every deploy log.
 4. Run each `pre_up` entry: `docker compose run --rm -T --build <service>
    </dev/null`.
 5. `docker compose up -d --build --remove-orphans`.

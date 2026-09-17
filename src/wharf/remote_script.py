@@ -125,6 +125,10 @@ def render_up(
     Each step's own ``paths`` (if set) scope its secrets injection
     independently of the target's ``paths``, which is what the final
     ``up`` command always uses.
+
+    The checkout is always of a bare SHA, i.e. a detached HEAD, so git's
+    multi-paragraph "detached HEAD" advice is switched off rather than
+    repeated in every deploy log.
     """
     pre_up_commands = [
         (
@@ -155,7 +159,7 @@ mkdir -p "$remote_dir"
       docker compose -f "$compose_file" images -q 2>/dev/null | sort -u || true)
   fi
 
-  git --work-tree="$remote_dir" --git-dir="$remote_repo" checkout -f "$REVISION"
+  git -c advice.detachedHead=false --work-tree="$remote_dir" --git-dir="$remote_repo" checkout -f "$REVISION"
   echo "Code deployed to $remote_dir (revision ${{REVISION:0:7}})"
 
   cd "$remote_dir"
