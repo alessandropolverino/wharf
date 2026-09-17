@@ -3,7 +3,7 @@ import subprocess
 import pytest
 
 from wharf import rotate as rotate_module
-from wharf.config import load_config
+from wharf.config import ConfigError, load_config
 from wharf.identity import generate_keypair, key_comment, key_paths, staged_key_paths
 from wharf.rotate import _render_rotate_script
 from wharf.ssh import RemoteCommandError
@@ -193,3 +193,15 @@ def test_rotate_defaults_to_ci_identity_in_ci(tmp_path, monkeypatch, write_confi
     rotate_module.rotate(config, repo="app")
 
     assert not (tmp_path / ".wharf" / "deploy_key").exists()
+
+
+def test_rotate_rejects_unknown_only_target_before_staging_a_key(tmp_path, monkeypatch, write_config):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CI", raising=False)
+    config = load_config(write_config(CONFIG_TEXT))
+    monkeypatch.setattr(rotate_module, "_rotate_target", lambda *a, **k: None)
+
+    with pytest.raises(ConfigError, match="typo"):
+        rotate_module.rotate(config, repo="app", identity="ci", only=("typo",))
+
+    assert not (tmp_path / ".wharf").exists()

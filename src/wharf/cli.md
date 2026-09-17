@@ -33,20 +33,26 @@ uses.
    `_add_common` (`config`, `--only`, `--repo`), `_add_ci_flags`
    (`--ci`/`--interactive`, mutually exclusive), and `_add_identity_flag`
    (`--identity`).
-2. `main(argv)` dispatches on `args.command`:
+2. `main(argv)` dispatches on `args.command` (via `_main`; `main` itself
+   only turns Ctrl-C into a one-line `wharf: interrupted` and exit code
+   130 instead of a traceback):
    - `ls` loads the config and prints each target's order, host, and
      `[secrets]`/healthcheck annotations — never touches the network,
      so it skips both the update check and any SSH connection.
    - `identities` calls `identity.list_identities()` directly — no
      config file involved at all, so it also skips the update check.
-   - `setup` and `rotate` each load the config, resolve `--repo`, call
-     `setup_mod.setup`/`rotate_mod.rotate` directly, and catch
-     `BranchMismatchError`/`RemoteCommandError` inline — not through
-     `_run_operation`, since neither raises the per-target
-     `OperationError` that `operations.py` wraps failures in.
-   - `deploy`/`down`/`reload` load the config, resolve `--repo` and the
-     CI/local auth mode, then call the matching
+   - Every other command loads the config (see `_load` below), resolves
+     `--repo` and the CI/local auth mode, then:
+   - `setup` and `rotate` share one block that calls
+     `setup_mod.setup`/`rotate_mod.rotate` directly and catches their
+     errors inline — not through `_run_operation`, since neither raises
+     the per-target `OperationError` that `operations.py` wraps failures
+     in.
+   - `deploy`/`down`/`reload` call the matching
      [`operations`](operations.md) function through `_run_operation`.
+     `deploy` first infers the revision (`git rev-parse HEAD`) unless
+     `--revision` is given; outside a git checkout (or in one with no
+     commits) that's a one-line error and exit 2, not a traceback.
 3. Before dispatching (except for `ls` and `identities`), a best-effort, silent-on-failure
    [`update_check`](update_check.md) runs — skipped in CI and when
    `WHARF_NO_UPDATE_CHECK` is set, so it never adds an unexpected network
@@ -54,9 +60,12 @@ uses.
 
 ## Error handling — `_run_operation` / `_load`
 
-Config errors (`ConfigError`, `OSError`, `yaml.YAMLError`) are caught at
-`_load()` and turned into a one-line `wharf: <path>: <message>` on
-stderr with exit code 2 — never a raw traceback.
+Config errors (`ConfigError`, `OSError`, `UnicodeDecodeError`,
+`yaml.YAMLError`) are caught at `_load()` and turned into a one-line
+`wharf: <path>: <message>` on stderr with exit code 2 — never a raw
+traceback. `_load()` also checks `--only` against the config's targets
+right away, so a typo'd target name is reported the same way before
+anything runs — in particular before `setup`/`rotate` generate a key.
 
 `_run_operation` (used for `deploy`/`down`/`reload`) catches the two
 ways an `operations` call can fail:
@@ -74,3 +83,6 @@ ways an `operations` call can fail:
 without going through `_run_operation`, since `setup.setup`/
 `rotate.rotate` raise `RemoteCommandError` straight from
 [`ssh.run_streaming`](ssh.md) rather than a wrapping `OperationError`.
+Local failures in those two (`ssh-keygen` missing or failing, an
+unreadable key file — `CalledProcessError`/`OSError`) print one line and
+exit 1.

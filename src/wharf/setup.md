@@ -23,11 +23,12 @@ writing to `.wharf/deploy_key` exactly as `wharf setup` has always done.
 
 ## `setup(config, *, repo, only=(), identity=None, force_ci=None)`
 
-Resolves the identity (`identity.resolve_identity` — explicit
-`--identity`, else `"ci"` in CI, else `"default"`), ensures that
-identity's keypair exists, then for each selected target runs
-`_provision_target`, which pipes `_render_setup_script`'s output over
-SSH:
+Selects the targets first — so an unknown `--only` name raises
+`ConfigError` before any key is generated — then resolves the identity
+(`identity.resolve_identity` — explicit `--identity`, else `"ci"` in CI,
+else `"default"`), ensures that identity's keypair exists, and for each
+selected target runs `_provision_target`, which pipes
+`_render_setup_script`'s output over SSH:
 
 1. Opens an interactive SSH session (`bash -s`) using the operator's own
    identity.

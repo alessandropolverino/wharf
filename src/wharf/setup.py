@@ -113,12 +113,15 @@ def setup(
 ) -> None:
     """Bootstrap every selected target: bare repo, remote dir, deploy key."""
     _check_branch(config)
+    # Selected before generating anything, so an --only typo can't leave
+    # a fresh key behind.
+    targets = config.select_targets(only)
     ci = is_ci() if force_ci is None else force_ci
     resolved_identity = resolve_identity(identity, is_ci=ci)
     private_key, public_key_path = ensure_deploy_keypair(resolved_identity)
     public_key = public_key_path.read_text().strip()
 
-    for target in config.select_targets(only):
+    for target in targets:
         print(f"==> Setting up {target.name} ({target.address})")
         _provision_target(config, target, repo, public_key)
 

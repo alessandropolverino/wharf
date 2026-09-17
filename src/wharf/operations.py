@@ -9,6 +9,7 @@ piling more changes on top of a broken deploy.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -66,15 +67,19 @@ def infer_repo_name(cwd: Path | None = None) -> str:
     Prefers the ``origin`` remote's URL basename (works the same way
     locally and in CI, where the checkout is a clone of that remote);
     falls back to the working directory's name if there's no remote
-    configured (e.g. a fresh local-only repo).
+    configured (e.g. a fresh local-only repo) or no `git` to ask.
     """
-    result = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
-        cwd=cwd, capture_output=True, text=True,
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        url = result.stdout.strip()
-        name = url.rstrip("/").rsplit("/", 1)[-1]
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=cwd, capture_output=True, text=True,
+        )
+    except OSError:
+        result = None
+    url = result.stdout.strip() if result is not None and result.returncode == 0 else ""
+    if url:
+        # The last component of ".../owner/name.git" or scp-style "host:name.git".
+        name = re.split(r"[/:]", url.rstrip("/"))[-1]
         return name[:-4] if name.endswith(".git") else name
     return Path(cwd or Path.cwd()).resolve().name
 

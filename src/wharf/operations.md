@@ -49,7 +49,9 @@ on whatever revision is already checked out on the target.
   e.g. running a prod config from a feature branch by accident. Raises
   `BranchMismatchError`.
 - **`infer_repo_name`** — the `{repo}` template value: the `origin`
-  remote's URL basename, falling back to the cwd's name. This is what
+  remote's URL basename (the last `/`- or `:`-separated component, so
+  scp-style `git@host:name.git` works too), falling back to the cwd's
+  name when there's no `origin` or no `git` at all. This is what
   lets the *same* config file work identically from a laptop or a CI
   runner — both resolve to the same project name because both operate on
   a checkout of the same repo.

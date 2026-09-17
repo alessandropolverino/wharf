@@ -51,3 +51,8 @@ not a separate resume command.
 
 Prints the same "update your CI secret" instruction
 [`setup.py`](setup.md) does, pointing at the now-live new private key.
+
+Targets are selected *before* a staged key is generated, so an unknown
+`--only` name raises `ConfigError` without leaving a staged key behind
+(which `wharf identities` would otherwise report as an interrupted
+rotation).

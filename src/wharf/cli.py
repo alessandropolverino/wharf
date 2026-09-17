@@ -111,12 +111,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load(config_path: Path) -> Config:
+def _load(config_path: Path, only: list[str] | None = None) -> Config:
     try:
-        return load_config(config_path)
-    except (ConfigError, OSError, yaml.YAMLError) as exc:
+        config = load_config(config_path)
+        # Checked up front so an --only typo is a clean config error before
+        # anything runs (or any key is generated), not a traceback.
+        config.select_targets(tuple(only or ()))
+    except (ConfigError, OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         print(f"wharf: {config_path}: {exc}", file=sys.stderr)
         raise SystemExit(2)
+    return config
 
 
 def _fingerprint(public_key: Path) -> str:
@@ -149,6 +153,14 @@ def _run_operation(fn, *args, **kwargs) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        print("\nwharf: interrupted", file=sys.stderr)
+        return 130
+
+
+def _main(argv: list[str] | None) -> int:
     args = build_parser().parse_args(argv)
 
     if getattr(args, "identity", None) is not None:
@@ -188,44 +200,39 @@ def main(argv: list[str] | None = None) -> int:
         if notice:
             print(notice, file=sys.stderr)
 
-    if args.command == "setup":
-        config = _load(args.config)
-        repo = _resolve_repo(args)
-        try:
-            setup_mod.setup(
-                config, repo=repo, only=tuple(args.only),
-                identity=args.identity, force_ci=_force_ci(args),
-            )
-        except BranchMismatchError as exc:
-            print(f"wharf: {exc}", file=sys.stderr)
-            return 2
-        except RemoteCommandError as exc:
-            print(f"wharf: {exc}", file=sys.stderr)
-            return exc.returncode
-        return 0
-
-    if args.command == "rotate":
-        config = _load(args.config)
-        repo = _resolve_repo(args)
-        try:
-            rotate_mod.rotate(
-                config, repo=repo, only=tuple(args.only),
-                identity=args.identity, force_ci=_force_ci(args),
-            )
-        except BranchMismatchError as exc:
-            print(f"wharf: {exc}", file=sys.stderr)
-            return 2
-        except RemoteCommandError as exc:
-            print(f"wharf: {exc}", file=sys.stderr)
-            return exc.returncode
-        return 0
-
-    config = _load(args.config)
+    config = _load(args.config, args.only)
     repo = _resolve_repo(args)
     force_ci = _force_ci(args)
 
+    if args.command in ("setup", "rotate"):
+        bootstrap = setup_mod.setup if args.command == "setup" else rotate_mod.rotate
+        try:
+            bootstrap(
+                config, repo=repo, only=tuple(args.only),
+                identity=args.identity, force_ci=force_ci,
+            )
+        except BranchMismatchError as exc:
+            print(f"wharf: {exc}", file=sys.stderr)
+            return 2
+        except RemoteCommandError as exc:
+            print(f"wharf: {exc}", file=sys.stderr)
+            return exc.returncode
+        except (subprocess.CalledProcessError, OSError) as exc:
+            # local failures, e.g. ssh-keygen missing or failing
+            print(f"wharf: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
     if args.command == "deploy":
-        revision = args.revision or operations.infer_revision()
+        try:
+            revision = args.revision or operations.infer_revision()
+        except (subprocess.CalledProcessError, OSError):
+            print(
+                "wharf: could not determine the revision to deploy -- run wharf from a git "
+                "checkout with at least one commit, or pass --revision SHA",
+                file=sys.stderr,
+            )
+            return 2
         return _run_operation(
             operations.deploy, config,
             repo=repo, revision=revision, only=tuple(args.only), force_ci=force_ci, identity=args.identity,

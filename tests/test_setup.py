@@ -1,7 +1,9 @@
 import subprocess
 
+import pytest
+
 from wharf import setup as wharf_setup
-from wharf.config import load_config
+from wharf.config import ConfigError, load_config
 from wharf.setup import _render_setup_script, ensure_deploy_keypair
 
 CONFIG_TEXT = """\
@@ -92,6 +94,17 @@ def test_setup_passes_resolved_identitys_public_key_to_provision_target(tmp_path
     wharf_setup.setup(config, repo="app")
 
     assert seen["public_key"].endswith("wharf-deploy")
+
+
+def test_setup_rejects_unknown_only_target_before_generating_a_key(tmp_path, monkeypatch, write_config):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CI", raising=False)
+    config = load_config(write_config(CONFIG_TEXT))
+
+    with pytest.raises(ConfigError, match="typo"):
+        wharf_setup.setup(config, repo="app", only=("typo",))
+
+    assert not (tmp_path / ".wharf").exists()
 
 
 # --- _render_setup_script executed for real, no SSH ---

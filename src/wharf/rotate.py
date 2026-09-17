@@ -107,6 +107,9 @@ def rotate(
     to pick up and continue from.
     """
     _check_branch(config)
+    # Selected before staging anything, so an --only typo can't leave a
+    # staged key behind that looks like an interrupted rotation.
+    targets = config.select_targets(only)
     ci = is_ci() if force_ci is None else force_ci
     resolved_identity = resolve_identity(identity, is_ci=ci)
 
@@ -115,7 +118,7 @@ def rotate(
     new_public_key = staged_public.read_text().strip()
     marker_pattern = f" {key_comment(resolved_identity)}$"
 
-    for target in config.select_targets(only):
+    for target in targets:
         print(f"==> Rotating '{resolved_identity}' on {target.name} ({target.address})")
         _rotate_target(target, new_public_key, marker_pattern)
 
