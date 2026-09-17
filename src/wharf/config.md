@@ -62,6 +62,8 @@ Beyond types, a few fields have shape rules:
 - **`host`** must be a hostname, an IPv4 address, or an *unbracketed*
   IPv6 address; brackets are added where a URL needs them (see
   `Target.address`).
+- Duplicate target `name`s or `order`s are rejected, and the error names
+  the duplicated values.
 
 ## Security-relevant validation
 

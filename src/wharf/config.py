@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -372,6 +374,12 @@ def _port(value: object, label: str) -> int:
     return port
 
 
+def _duplicates(values: Iterable[str] | Iterable[int]) -> list[str]:
+    """Values appearing more than once, sorted (numerically for orders), as strings."""
+    repeated = sorted(value for value, count in Counter(values).items() if count > 1)
+    return [str(value) for value in repeated]
+
+
 def load_config(path: Path) -> Config:
     """Parse and fully validate a wharf config file.
 
@@ -404,12 +412,12 @@ def load_config(path: Path) -> Config:
         for index, item in enumerate(raw_targets)
     ]
 
-    names = [t.name for t in targets]
-    if len(names) != len(set(names)):
-        raise ConfigError("target names must be unique")
-    orders = [t.order for t in targets]
-    if len(orders) != len(set(orders)):
-        raise ConfigError("target order values must be unique")
+    duplicate_names = _duplicates(t.name for t in targets)
+    if duplicate_names:
+        raise ConfigError(f"target names must be unique (duplicated: {', '.join(duplicate_names)})")
+    duplicate_orders = _duplicates(t.order for t in targets)
+    if duplicate_orders:
+        raise ConfigError(f"target order values must be unique (duplicated: {', '.join(duplicate_orders)})")
 
     return Config(
         remote_repo=_absolute_path(document["remote_repo"], "remote_repo"),

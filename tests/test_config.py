@@ -231,6 +231,18 @@ def test_pre_up_rejects_trailing_newline(write_config):
         load_config(write_config(text))
 
 
+def test_duplicate_target_names_error_names_the_duplicate(write_config):
+    text = VALID_MINIMAL + VALID_MINIMAL.split("targets:\n")[1].replace("order: 10", "order: 20")
+    with pytest.raises(ConfigError, match=r"duplicated: app\)"):
+        load_config(write_config(text))
+
+
+def test_duplicate_target_orders_error_names_the_duplicate(write_config):
+    text = VALID_MINIMAL + VALID_MINIMAL.split("targets:\n")[1].replace("name: app", "name: other")
+    with pytest.raises(ConfigError, match=r"order values must be unique \(duplicated: 10\)"):
+        load_config(write_config(text))
+
+
 @pytest.mark.parametrize(
     ("original", "replacement", "label"),
     [
