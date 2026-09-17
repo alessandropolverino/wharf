@@ -180,7 +180,7 @@ def test_deploy_dry_run_prints_plan_without_connecting_or_credentials(monkeypatc
     out = capsys.readouterr().out
     assert exit_code == 0
     assert "==> [dry run] Deploying app (203.0.113.10:22)" in out
-    assert "Would run locally: git push ssh://deploy@203.0.113.10:22/srv/git/myapp.git abc123:refs/heads/main" in out
+    assert "Would run locally: git push ssh://deploy@203.0.113.10:22/srv/git/myapp.git +abc123:refs/heads/main" in out
     assert "Would run on deploy@203.0.113.10 (port 22): REVISION=abc123 bash -l -s <<'WHARF_SCRIPT'" in out
     assert "remote_dir=/opt/deploys/myapp/app" in out
     assert out.rstrip().endswith("Would then poll https://app.example.com/health until it responds")

@@ -39,7 +39,7 @@ def test_deploy_dry_run_shows_push_script_and_healthcheck(config, capsys):
     out = capsys.readouterr().out
     lines = out.splitlines()
     assert lines[0] == "==> [dry run] Deploying app ([2001:db8::10]:2222)"
-    assert lines[1] == "Would run locally: git push ssh://deploy@[2001:db8::10]:2222/srv/git/myapp.git abc123:refs/heads/main"
+    assert lines[1] == "Would run locally: git push ssh://deploy@[2001:db8::10]:2222/srv/git/myapp.git +abc123:refs/heads/main"
     assert lines[2] == "Would run on deploy@2001:db8::10 (port 2222): REVISION=abc123 bash -l -s <<'WHARF_SCRIPT'"
     assert lines[3] == "set -euo pipefail"
     assert 'checkout -f "$REVISION"' in out
