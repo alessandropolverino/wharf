@@ -100,6 +100,20 @@ def test_rotate_script_is_idempotent(tmp_path, monkeypatch):
     assert lines.count(new_key) == 1
 
 
+def test_rotate_script_handles_authorized_keys_without_trailing_newline(tmp_path, monkeypatch):
+    # grep terminates its last output line, so the appended key can't be
+    # glued onto a final line that lacked a newline (the bug `setup` had).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir()
+    (ssh_dir / "authorized_keys").write_text("ssh-ed25519 AAAAOLD wharf:ci\nssh-ed25519 AAAAHUMAN")
+    new_key = "ssh-ed25519 AAAANEW wharf:ci"
+
+    subprocess.run(["bash", "-s"], input=_render_rotate_script(new_key, " wharf:ci$", "app"), text=True, check=True)
+
+    assert (ssh_dir / "authorized_keys").read_text() == f"ssh-ed25519 AAAAHUMAN\n{new_key}\n"
+
+
 # --- rotate(): staging/promotion orchestration, with _rotate_target
 # faked out so no real SSH happens ---
 
