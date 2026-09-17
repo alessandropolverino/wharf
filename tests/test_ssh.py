@@ -1,5 +1,10 @@
+import shlex
+from dataclasses import replace
+from pathlib import Path
+
 import pytest
 
+from wharf import ssh
 from wharf.config import Target
 from wharf.ssh import SessionAuth, build_git_ssh_command, build_ssh_argv
 
@@ -18,6 +23,49 @@ AUTH = SessionAuth(batch=False, identity_file=None)
 def test_build_ssh_argv_includes_destination():
     argv = build_ssh_argv(TARGET, AUTH)
     assert argv[-1] == "deploy@203.0.113.10"
+
+
+def test_build_ssh_argv_ends_option_parsing_before_destination():
+    # Belt-and-braces with config validation: after "--", even a user like
+    # "-oProxyCommand=..." is a destination, never an ssh option.
+    argv = build_ssh_argv(TARGET, AUTH)
+    assert argv[-2:] == ["--", "deploy@203.0.113.10"]
+
+
+def test_build_git_ssh_command_has_no_option_terminator():
+    # git appends "-p <port> user@host ..." to GIT_SSH_COMMAND; a "--" here
+    # would turn that "-p" into the destination.
+    assert "--" not in shlex.split(build_git_ssh_command(TARGET, AUTH))
+
+
+def _known_hosts_file(argv: list[str]) -> Path:
+    option = next(part for part in argv if part.startswith("UserKnownHostsFile="))
+    return Path(option.split("=", 1)[1])
+
+
+def test_pinned_known_hosts_file_is_removed_at_exit(monkeypatch):
+    registered = []
+    monkeypatch.setattr(ssh.atexit, "register", lambda fn, *args, **kwargs: registered.append((fn, args, kwargs)))
+
+    known_hosts = _known_hosts_file(build_ssh_argv(TARGET, AUTH))
+
+    assert known_hosts.read_text() == f"[203.0.113.10]:2222 {TARGET.host_key}\n"
+    for fn, args, kwargs in registered:
+        fn(*args, **kwargs)
+    assert not known_hosts.exists()
+
+
+@pytest.mark.parametrize(
+    ("host", "port", "expected"),
+    [
+        ("203.0.113.10", 22, "203.0.113.10"),
+        ("2001:db8::1", 22, "2001:db8::1"),
+        ("2001:db8::1", 2222, "[2001:db8::1]:2222"),
+    ],
+)
+def test_known_hosts_line_host_pattern(host, port, expected):
+    line = ssh._known_hosts_line(replace(TARGET, host=host, port=port))
+    assert line == f"{expected} {TARGET.host_key}\n"
 
 
 def test_build_git_ssh_command_excludes_destination():

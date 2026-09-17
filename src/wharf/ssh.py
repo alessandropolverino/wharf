@@ -130,13 +130,18 @@ def _pin_known_hosts(target: Target) -> Path:
     ``~/.ssh/known_hosts``) means a stale or unrelated entry elsewhere on
     the machine can never substitute for the key committed in the config
     -- the config file is the sole source of truth for host identity.
+
+    Removed at process exit rather than right away: ``GIT_SSH_COMMAND``
+    only carries the path, and git reads the file later, from its own
+    `ssh` child.
     """
-    handle = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         mode="w", prefix="wharf-known-hosts-", delete=False
-    )
-    handle.write(_known_hosts_line(target))
-    handle.close()
-    return Path(handle.name)
+    ) as handle:
+        handle.write(_known_hosts_line(target))
+    path = Path(handle.name)
+    atexit.register(path.unlink, missing_ok=True)
+    return path
 
 
 def _ssh_option_argv(target: Target, auth: SessionAuth) -> list[str]:
@@ -164,8 +169,16 @@ def _ssh_option_argv(target: Target, auth: SessionAuth) -> list[str]:
 
 
 def build_ssh_argv(target: Target, auth: SessionAuth) -> list[str]:
-    """The argv for a standalone `ssh` invocation against ``target``."""
-    return _ssh_option_argv(target, auth) + [f"{target.user}@{target.host}"]
+    """The argv for a standalone `ssh` invocation against ``target``.
+
+    ``--`` ends option parsing before the destination, so a ``user``
+    beginning with ``-`` can never be read as an option (e.g.
+    ``-oProxyCommand=...``, which ssh would run locally). The config
+    loader already rejects such names; this is the second layer. It can't
+    go in :func:`_ssh_option_argv`: git appends its own ``-p <port>``
+    after ``GIT_SSH_COMMAND``, which must still parse as an option.
+    """
+    return _ssh_option_argv(target, auth) + ["--", f"{target.user}@{target.host}"]
 
 
 def build_git_ssh_command(target: Target, auth: SessionAuth) -> str:
