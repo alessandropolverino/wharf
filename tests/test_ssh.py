@@ -151,3 +151,34 @@ def test_capture_remote_script_raises_on_failure(monkeypatch):
     monkeypatch.setattr(ssh.subprocess, "run", lambda argv, **kwargs: subprocess.CompletedProcess(argv, 3, stdout=""))
     with pytest.raises(ssh.RemoteCommandError, match=r"read failed \(exit 3\)"):
         ssh.capture_remote_script(TARGET, AUTH, "x", {}, description="read")
+
+
+class _Stream:
+    """A stand-in for sys.stdout/stderr that records when it is flushed."""
+
+    def __init__(self, log, name):
+        self.log, self.name = log, name
+
+    def write(self, text):
+        pass
+
+    def flush(self):
+        self.log.append(f"flush {self.name}")
+
+
+def test_run_streaming_flushes_python_output_before_the_child_writes(monkeypatch):
+    # When stdout is a pipe (CI logs), buffered headers would otherwise land
+    # after the subprocess output they introduce.
+    log = []
+    monkeypatch.setattr(ssh.sys, "stdout", _Stream(log, "stdout"))
+    monkeypatch.setattr(ssh.sys, "stderr", _Stream(log, "stderr"))
+
+    def fake_run(argv, **kwargs):
+        log.append("child")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(ssh.subprocess, "run", fake_run)
+
+    ssh.run_streaming(["x"], description="x")
+
+    assert log == ["flush stdout", "flush stderr", "child"]

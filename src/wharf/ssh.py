@@ -25,6 +25,7 @@ import atexit
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -215,6 +216,13 @@ def run_streaming(
     if capture:
         kwargs["stdout"] = subprocess.PIPE
         kwargs["text"] = True
+    # Whatever wharf printed so far (the "==> Deploying app" headers) must
+    # reach the fd before the child's output: Python block-buffers stdout
+    # when it isn't a terminal -- a CI log, say -- while the child writes
+    # to the same fd directly, which puts headers after the output they
+    # introduce.
+    sys.stdout.flush()
+    sys.stderr.flush()
     result = subprocess.run(argv, env=full_env, **kwargs)
     if result.returncode != 0:
         raise RemoteCommandError(description, result.returncode)

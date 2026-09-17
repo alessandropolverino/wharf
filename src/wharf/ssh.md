@@ -74,6 +74,11 @@ all show up live, exactly as if you'd typed the command yourself. Raises
 stdout as a string instead of streaming it — stderr still streams — for
 the few scripts whose output wharf reads rather than shows.
 
+It flushes Python's own stdout/stderr before starting the child. Python
+block-buffers stdout when it isn't a terminal (a CI log, say) while the
+child writes to the same fd directly, so without the flush a
+`==> Deploying app` header lands *after* the output it introduces.
+
 ## `run_remote_script(target, auth, script, env_vars, *, description)`
 
 Runs a rendered script (from [`remote_script.md`](remote_script.md)) via
