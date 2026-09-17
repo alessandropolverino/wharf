@@ -163,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         for target in config.targets:
             secrets_note = " [secrets]" if target.uses_secrets else ""
             healthcheck_note = f" -> {target.healthcheck}" if target.healthcheck else ""
-            print(f"{target.order:>4}  {target.name:<20} {target.user}@{target.host}:{target.port}{secrets_note}{healthcheck_note}")
+            print(f"{target.order:>4}  {target.name:<20} {target.user}@{target.address}{secrets_note}{healthcheck_note}")
         return 0
 
     if args.command == "identities":

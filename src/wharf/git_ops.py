@@ -12,6 +12,17 @@ from .config import Target
 from .ssh import SessionAuth, build_git_ssh_command, run_streaming
 
 
+def push_url(target: Target, remote_repo: str) -> str:
+    """The ``ssh://`` URL of ``remote_repo`` on ``target``.
+
+    Built from :attr:`Target.address`, which brackets an IPv6 host:
+    unbracketed, git can't tell where the address ends and the port
+    begins, and hands ssh a mangled destination (``deploy@2001:db8::1:22``)
+    with no ``-p``.
+    """
+    return f"ssh://{target.user}@{target.address}{remote_repo}"
+
+
 def push_revision(
     target: Target,
     remote_repo: str,
@@ -20,7 +31,6 @@ def push_revision(
     auth: SessionAuth,
 ) -> None:
     """`git push` ``revision`` to ``remote_repo`` on ``target``."""
-    url = f"ssh://{target.user}@{target.host}:{target.port}{remote_repo}"
-    argv = ["git", "push", url, f"{revision}:refs/heads/{branch}"]
+    argv = ["git", "push", push_url(target, remote_repo), f"{revision}:refs/heads/{branch}"]
     env = {"GIT_SSH_COMMAND": build_git_ssh_command(target, auth)}
     run_streaming(argv, description=f"git push to {target.name}", env=env)

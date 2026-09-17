@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from wharf.config import ConfigError, DEFAULT_BRANCH, DEFAULT_COMPOSE_FILE, PreUpStep, load_config
@@ -226,4 +228,78 @@ def test_pre_up_rejects_trailing_newline(write_config):
         "    order: 10\n", '    order: 10\n    pre_up: ["migrate\\n"]\n'
     )
     with pytest.raises(ConfigError, match="compose service name"):
+        load_config(write_config(text))
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement", "label"),
+    [
+        ("remote_repo: /srv/git/{repo}.git", "remote_repo: srv/git/{repo}.git", "remote_repo"),
+        ("remote_repo: /srv/git/{repo}.git", "remote_repo: '{repo}.git'", "remote_repo"),
+        ("remote_dir: /opt/deploys/{repo}/app", "remote_dir: deploys/{repo}/app", r"targets\[0\].remote_dir"),
+    ],
+)
+def test_remote_paths_must_be_absolute(write_config, original, replacement, label):
+    # A relative remote_repo can't form a valid ssh:// push URL
+    # ("ssh://deploy@host:22srv/git/..." -- git reads "22srv" as part of the host).
+    text = VALID_MINIMAL.replace(original, replacement)
+    with pytest.raises(ConfigError, match=rf"{label} must be an absolute path"):
+        load_config(write_config(text))
+
+
+def test_tilde_remote_path_rejected_with_hint(write_config):
+    # Remote paths are shell-quoted wherever they're used, so a leading ~ is
+    # never expanded -- `mkdir -p '~/app'` would create a directory named "~".
+    text = VALID_MINIMAL.replace("remote_dir: /opt/deploys/{repo}/app", "remote_dir: ~/deploys/{repo}/app")
+    with pytest.raises(ConfigError, match="'~' is not expanded"):
+        load_config(write_config(text))
+
+
+@pytest.mark.parametrize("user", ["deploy", "deploy_user", "ci.bot", "jdoe@corp.example.com", "_svc", "u-1"])
+def test_valid_ssh_users_accepted(write_config, user):
+    config = load_config(write_config(VALID_MINIMAL.replace("user: deploy", f"user: '{user}'")))
+    assert config.targets[0].user == user
+
+
+@pytest.mark.parametrize("user", ["-oProxyCommand=touch /tmp/x", "-l", "de ploy", ".hidden", "a:b", "x\ny"])
+def test_unsafe_ssh_users_rejected(write_config, user):
+    # A leading "-" would make `ssh` parse the user@host argument as an
+    # option -- -oProxyCommand=... runs a local command.
+    text = VALID_MINIMAL.replace("user: deploy", f"user: {json.dumps(user)}")
+    with pytest.raises(ConfigError, match=r"targets\[0\].user must be a valid SSH user name"):
+        load_config(write_config(text))
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["203.0.113.10", "app.example.com", "prod-box", "2001:db8::1", "::1", "::ffff:192.0.2.1"],
+)
+def test_valid_hosts_accepted(write_config, host):
+    config = load_config(write_config(VALID_MINIMAL.replace("host: 203.0.113.10", f"host: '{host}'")))
+    assert config.targets[0].host == host
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["-oProxyCommand=x", "[2001:db8::1]", "2001:db8::zz", "host name", "app.example.com:22", "user@host", ".example.com"],
+)
+def test_malformed_hosts_rejected(write_config, host):
+    text = VALID_MINIMAL.replace("host: 203.0.113.10", f"host: '{host}'")
+    with pytest.raises(ConfigError, match=r"targets\[0\].host must be a hostname"):
+        load_config(write_config(text))
+
+
+@pytest.mark.parametrize(
+    ("host", "port", "address"),
+    [("203.0.113.10", 22, "203.0.113.10:22"), ("app.example.com", 2222, "app.example.com:2222"), ("2001:db8::1", 22, "[2001:db8::1]:22")],
+)
+def test_target_address_brackets_ipv6(write_config, host, port, address):
+    text = VALID_MINIMAL.replace("host: 203.0.113.10", f"host: '{host}'").replace("port: 22", f"port: {port}")
+    assert load_config(write_config(text)).targets[0].address == address
+
+
+def test_ipv6_zone_id_rejected(write_config):
+    # IPv6Address accepts "fe80::1%eth0", but "%" would need escaping in the push URL.
+    text = VALID_MINIMAL.replace("host: 203.0.113.10", "host: 'fe80::1%eth0'")
+    with pytest.raises(ConfigError, match=r"targets\[0\].host must be a hostname"):
         load_config(write_config(text))

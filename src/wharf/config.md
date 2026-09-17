@@ -22,6 +22,8 @@ the schema.
 - **`Target`** — one deploy destination: `name`, `remote_dir`, `host`,
   `port`, `user`, `host_key`, `order`, plus optional `healthcheck`,
   `compose_file`, `paths`, `pre_up`.
+  - `address` — `host:port`, with an IPv6 host bracketed
+    (`[2001:db8::1]:22`); used for progress output and the push URL.
   - `uses_secrets` — true if the target's own `up` (via `paths`) or any
     `pre_up` step injects secrets.
 - **`SecretsDefaults`** — shared Infisical location, defined once per
@@ -49,6 +51,18 @@ Every field is validated against an *exact* key set
 (`_exact_keys` — required ∪ optional, nothing else) — an unrecognized key
 anywhere in the file is a hard error, not a silently-ignored typo.
 
+Beyond types, a few fields have shape rules:
+
+- **`remote_repo`** and each target's **`remote_dir`** must be absolute
+  paths. A relative `remote_repo` can't form a valid `ssh://` push URL
+  (`ssh://deploy@host:22srv/git/...` — git reads `22srv` as part of the
+  host), and a leading `~` is never expanded because the paths are
+  shell-quoted everywhere they're used — `mkdir -p '~/app'` creates a
+  directory literally named `~`.
+- **`host`** must be a hostname, an IPv4 address, or an *unbracketed*
+  IPv6 address; brackets are added where a URL needs them (see
+  `Target.address`).
+
 ## Security-relevant validation
 
 These exist specifically to keep a config file from becoming a remote
@@ -67,6 +81,12 @@ command-injection or credential-exfiltration vector — see also
   anything that isn't a plausible compose service name. This is
   defense-in-depth: `remote_script.py` also `shlex.quote()`s every
   service name at render time, independently of this regex.
+- **`user`** must match `^[A-Za-z0-9_][A-Za-z0-9._@-]*$`. It's the first
+  half of the `user@host` argument handed to `ssh`, so a leading `-`
+  would be parsed as an option — `-oProxyCommand=...` runs a local
+  command. Defense in depth again: [`ssh.build_ssh_argv`](ssh.md) also
+  puts `--` before the destination. (`host` can't start with `-` either,
+  per the rule above.)
 
 ## `render_repo_template(template, repo)`
 

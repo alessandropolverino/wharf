@@ -13,10 +13,12 @@ filename, not the config.
 ```yaml
 version: 1                              # required, must be 1
 
-remote_repo: /srv/git/{repo}.git        # required. Path to the bare git
-                                         # repo on each target. {repo} is
-                                         # substituted with the project
-                                         # name (see "The {repo} placeholder").
+remote_repo: /srv/git/{repo}.git        # required. Absolute path to the
+                                         # bare git repo on each target
+                                         # (no relative paths, no ~).
+                                         # {repo} is substituted with the
+                                         # project name (see "The {repo}
+                                         # placeholder").
 
 branch: main                            # optional, default "main".
                                          # The branch ref wharf pushes to
@@ -48,12 +50,17 @@ secrets:                                # optional. Omit entirely if no
 
 targets:                                # required, non-empty list.
   - name: etl                           # required, unique within the file.
-    remote_dir: /opt/deploys/{repo}/app # required. Where the working
-                                         # tree is checked out and compose
-                                         # runs from on this target.
-    host: 203.0.113.10                  # required.
+    remote_dir: /opt/deploys/{repo}/app # required. Absolute path where
+                                         # the working tree is checked
+                                         # out and compose runs from on
+                                         # this target.
+    host: 203.0.113.10                  # required. Hostname, IPv4, or
+                                         # IPv6 address (unbracketed,
+                                         # e.g. 2001:db8::10).
     port: 22                            # required, 1-65535.
-    user: ubuntu                        # required. SSH user.
+    user: ubuntu                        # required. SSH user (letters,
+                                         # digits, . _ @ -; can't start
+                                         # with - or .).
     host_key: ssh-ed25519 AAAA...       # required. Pinned host key —
                                          # wharf never trusts an
                                          # unrecognized host key.

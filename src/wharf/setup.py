@@ -119,7 +119,7 @@ def setup(
     public_key = public_key_path.read_text().strip()
 
     for target in config.select_targets(only):
-        print(f"==> Setting up {target.name} ({target.host}:{target.port})")
+        print(f"==> Setting up {target.name} ({target.address})")
         _provision_target(config, target, repo, public_key)
 
     print()

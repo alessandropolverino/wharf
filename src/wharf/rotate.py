@@ -116,7 +116,7 @@ def rotate(
     marker_pattern = f" {key_comment(resolved_identity)}$"
 
     for target in config.select_targets(only):
-        print(f"==> Rotating '{resolved_identity}' on {target.name} ({target.host}:{target.port})")
+        print(f"==> Rotating '{resolved_identity}' on {target.name} ({target.address})")
         _rotate_target(target, new_public_key, marker_pattern)
 
     staged_private.rename(live_private)

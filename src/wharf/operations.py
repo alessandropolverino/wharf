@@ -106,7 +106,7 @@ def deploy(
     """Push, checkout, build, and healthcheck each selected target in order."""
     _check_branch(config)
     for target in config.select_targets(only):
-        print(f"==> Deploying {target.name} ({target.host}:{target.port})")
+        print(f"==> Deploying {target.name} ({target.address})")
         remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
         try:
             auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
@@ -141,7 +141,7 @@ def down(
     """Stop (and optionally wipe volumes for) each selected target."""
     _check_branch(config)
     for target in config.select_targets(only):
-        print(f"==> Stopping {target.name} ({target.host}:{target.port})")
+        print(f"==> Stopping {target.name} ({target.address})")
         _, remote_dir = _remote_repo_and_dir(config, target, repo)
         try:
             auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
@@ -169,7 +169,7 @@ def reload(
     """Re-apply compose (no rebuild) for each selected target."""
     _check_branch(config)
     for target in config.select_targets(only):
-        print(f"==> Reloading {target.name} ({target.host}:{target.port})")
+        print(f"==> Reloading {target.name} ({target.address})")
         _, remote_dir = _remote_repo_and_dir(config, target, repo)
         try:
             auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
