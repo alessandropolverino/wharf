@@ -280,17 +280,34 @@ wharf deploy deploy.yml            # prod
 wharf deploy deploy.staging.yml    # staging
 ```
 
-## Status and logs
+## Deploy history, status, and rollback
 
-Every successful `deploy` appends one line to `<remote_dir>/.wharf-history`
-on the target -- `<UTC timestamp> <full sha> deploy` -- right after
-`docker compose up` succeeds. A deploy that fails in `pre_up` or `up`
-records nothing. Besides the checkout and the lock file, it's the only
-state wharf keeps on a target.
+Every successful `deploy` (and `rollback`) appends one line to
+`<remote_dir>/.wharf-history` on the target -- `<UTC timestamp> <full sha>
+<deploy|rollback>` -- right after `docker compose up` succeeds. A deploy
+that fails in `pre_up` or `up` records nothing. Besides the checkout and
+the lock file, it's the only state wharf keeps on a target, and it's
+what these commands read:
 
-`wharf status deploy.yml` shows, per target: the checked-out revision,
-the last history entry, whether the deploy lock is held right now (i.e.
-a deploy, down or reload is running), and `docker compose ps`.
+- `wharf status deploy.yml` -- per target: the checked-out revision, the
+  last history entry, whether the deploy lock is held right now (i.e. a
+  deploy, down or reload is running), and `docker compose ps`.
+- `wharf history deploy.yml [--limit N]` -- the history, newest first.
+- `wharf rollback deploy.yml [--steps N]` -- re-deploys the revision that
+  was deployed *before* the current one; consecutive deploys of the same
+  revision count once, and `--steps 2` goes one further back. It's a
+  normal deploy of that revision -- same script, `pre_up` included,
+  healthcheck after -- except nothing is pushed: the target's bare repo
+  already has the commit, so it works from a CI runner or a fresh clone
+  that doesn't. The rollback is recorded as a `rollback` entry, so a
+  second `wharf rollback` returns to what you rolled back from.
+  `--dry-run` reads the history and prints what would run, without
+  deploying.
+
+Targets deployed before this history existed have no entries yet; `wharf
+rollback` says so and points at `wharf deploy --revision <sha>`, which
+deploys any revision the target's bare repo can reach -- and is also how
+to go back further than the history does.
 
 `wharf logs deploy.yml [SERVICE...] [--only NAME] [-f] [--tail N] [--since WHEN]`
 streams `docker compose logs` from each selected target (the last 100

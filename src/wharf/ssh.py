@@ -14,7 +14,9 @@ Every remote operation goes through the same two building blocks:
 It deliberately does *not* capture stdout/stderr: leaving them attached
 to the parent's means `git push` progress, `ssh` prompts, and
 `docker compose build` output all show up live, exactly as if you'd
-typed the command yourself.
+typed the command yourself. The one exception is ``capture=True``, for
+the read-only scripts whose stdout wharf has to parse (the deploy
+history); stderr still streams even then.
 """
 
 from __future__ import annotations
@@ -196,20 +198,27 @@ def run_streaming(
     description: str,
     env: dict[str, str] | None = None,
     input_text: str | None = None,
-) -> None:
+    capture: bool = False,
+) -> str | None:
     """Run ``argv`` with output streamed live; raise on non-zero exit.
 
     stdout/stderr are intentionally left attached to the parent process
-    rather than captured -- see the module docstring.
+    rather than captured -- see the module docstring. With ``capture``,
+    stdout is returned instead of streamed (stderr still streams, so ssh
+    prompts and remote errors stay visible); otherwise None is returned.
     """
     full_env = {**os.environ, **env} if env else None
     kwargs: dict[str, object] = {}
     if input_text is not None:
         kwargs["input"] = input_text
         kwargs["text"] = True
+    if capture:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["text"] = True
     result = subprocess.run(argv, env=full_env, **kwargs)
     if result.returncode != 0:
         raise RemoteCommandError(description, result.returncode)
+    return result.stdout if capture else None
 
 
 def remote_command(env_vars: dict[str, str]) -> list[str]:
@@ -247,3 +256,24 @@ def run_remote_script(
     """
     argv = build_ssh_argv(target, auth) + remote_command(env_vars)
     run_streaming(argv, description=description, input_text=script)
+
+
+def capture_remote_script(
+    target: Target,
+    auth: SessionAuth,
+    script: str,
+    env_vars: dict[str, str],
+    *,
+    description: str,
+) -> str:
+    """:func:`run_remote_script`, but returning the script's stdout.
+
+    For read-only scripts whose output wharf parses rather than shows
+    (see :func:`wharf.remote_script.render_history`). Same login shell,
+    same command line; only stdout is captured, so ssh prompts and any
+    remote error output still show up live.
+    """
+    argv = build_ssh_argv(target, auth) + remote_command(env_vars)
+    output = run_streaming(argv, description=description, input_text=script, capture=True)
+    assert output is not None
+    return output

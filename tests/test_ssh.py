@@ -1,4 +1,5 @@
 import shlex
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -115,3 +116,38 @@ def test_resolve_ci_ignores_identity_name_reads_same_env_var(monkeypatch):
     assert auth_default.identity_file is not None
     assert auth_named.identity_file is not None
     assert auth_default.identity_file.read_text() == auth_named.identity_file.read_text()
+
+
+def test_run_streaming_capture_returns_stdout_but_keeps_stderr_live(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, stdout="line\n")
+
+    monkeypatch.setattr(ssh.subprocess, "run", fake_run)
+
+    assert ssh.run_streaming(["x"], description="x", input_text="s", capture=True) == "line\n"
+    assert seen["stdout"] is subprocess.PIPE and "stderr" not in seen
+    assert ssh.run_streaming(["x"], description="x") is None
+
+
+def test_capture_remote_script_runs_the_same_remote_command_line(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"], seen["input"] = argv, kwargs.get("input")
+        return subprocess.CompletedProcess(argv, 0, stdout="history\n")
+
+    monkeypatch.setattr(ssh.subprocess, "run", fake_run)
+
+    output = ssh.capture_remote_script(TARGET, AUTH, "cat file\n", {"REVISION": "abc"}, description="read")
+
+    assert output == "history\n" and seen["input"] == "cat file\n"
+    assert seen["argv"][-5:] == ["deploy@203.0.113.10", "REVISION=abc", "bash", "-l", "-s"]
+
+
+def test_capture_remote_script_raises_on_failure(monkeypatch):
+    monkeypatch.setattr(ssh.subprocess, "run", lambda argv, **kwargs: subprocess.CompletedProcess(argv, 3, stdout=""))
+    with pytest.raises(ssh.RemoteCommandError, match=r"read failed \(exit 3\)"):
+        ssh.capture_remote_script(TARGET, AUTH, "x", {}, description="read")

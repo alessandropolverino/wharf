@@ -64,13 +64,15 @@ onto that string itself, so baking a destination into it too would make
 ssh see two destinations and treat the second as a remote command to
 execute.
 
-## `run_streaming(argv, *, description, env=None, input_text=None)`
+## `run_streaming(argv, *, description, env=None, input_text=None, capture=False)`
 
 The one place that shells out to a subprocess. Deliberately does **not**
 capture stdout/stderr — they're left attached to the parent process so
 `git push` progress, `ssh` prompts, and `docker compose build` output
 all show up live, exactly as if you'd typed the command yourself. Raises
-`RemoteCommandError` on non-zero exit.
+`RemoteCommandError` on non-zero exit. With `capture=True` it returns
+stdout as a string instead of streaming it — stderr still streams — for
+the few scripts whose output wharf reads rather than shows.
 
 ## `run_remote_script(target, auth, script, env_vars, *, description)`
 
@@ -88,3 +90,14 @@ Infisical's machine-identity credentials are expected to live (see
 [`configuration.md`](../../docs/configuration.md#secrets)). A plain
 non-login `bash -s` would silently skip that and leave those variables
 unset.
+
+## `capture_remote_script(target, auth, script, env_vars, *, description)`
+
+`run_remote_script` with `capture=True`: same login shell, same command
+line, but the script's stdout comes back as a string. Used for the
+deploy history ([`remote_script.render_history`](remote_script.md)),
+whose lines [`operations`](operations.md) parses rather than shows. Only
+stdout is captured, so ssh prompts and remote error output still appear
+live — and since a login shell may print whatever a profile script
+echoes, the parser on the other side ignores lines that don't look like
+history entries.

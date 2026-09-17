@@ -10,7 +10,7 @@ For the config *schema* (what goes in `deploy.yml`), see
 |---|---|
 | [`cli.md`](cli.md) | `argparse` CLI, subcommand dispatch, error → exit code mapping. |
 | [`config.md`](config.md) | Parses and validates a config file into `Config`/`Target`/`SecretsDefaults`/`PreUpStep`. |
-| [`operations.md`](operations.md) | Orchestrates `deploy`/`down`/`reload`, and the read-only `status`/`logs`, across a config's targets, sequentially. |
+| [`operations.md`](operations.md) | Orchestrates `deploy`/`down`/`reload`/`rollback`, and the read-only `status`/`logs`/`history`, across a config's targets, sequentially. |
 | [`remote_script.md`](remote_script.md) | Renders the bash scripts that actually run on each target. |
 | [`ssh.md`](ssh.md) | SSH argv construction, host-key pinning, CI vs. local auth, subprocess execution. |
 | [`identity.md`](identity.md) | Named deploy-key identity resolution, on-disk key paths, and the `authorized_keys` marker used for rotation. |
@@ -28,11 +28,11 @@ For the config *schema* (what goes in `deploy.yml`), see
 cli.py
  ├─ config.py            (load_config)
  ├─ identity.py           list_identities
- ├─ operations.py         deploy / down / reload / status / logs
+ ├─ operations.py         deploy / down / reload / status / logs / history / rollback
  │   ├─ config.py         (select_targets, compose_file_for, render_repo_template)
  │   ├─ git_ops.py         push_revision  ──┐   (push_url, push_refspec for --dry-run)
- │   ├─ remote_script.py   render_up/down/reload/status/logs
- │   ├─ ssh.py              SessionAuth, run_remote_script  ◄┘ (both go over SSH; remote_command for --dry-run)
+ │   ├─ remote_script.py   render_up/down/reload/status/logs/history
+ │   ├─ ssh.py              SessionAuth, run_remote_script, capture_remote_script  ◄┘ (both go over SSH; remote_command for --dry-run)
  │   │   └─ identity.py     key_paths, resolve_identity (named-identity local auth)
  │   └─ healthcheck.py      wait_healthy
  ├─ setup.py               setup

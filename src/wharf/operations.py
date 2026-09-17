@@ -9,19 +9,29 @@ piling more changes on top of a broken deploy.
 Each action also has a dry-run mode that prints, per target, exactly what
 would be pushed and piped to the target's shell, without connecting.
 
-``status`` and ``logs`` are read-only views of a target.
+``status``, ``logs`` and ``history`` are read-only views of a target.
+``rollback`` re-deploys an earlier revision, chosen from the target's own
+deploy history (which every successful ``up`` records).
 """
 
 from __future__ import annotations
 
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Config, Target, render_repo_template
 from .healthcheck import wait_healthy
-from .remote_script import render_down, render_logs, render_reload, render_status, render_up
-from .ssh import SessionAuth, remote_command, run_remote_script
+from .remote_script import (
+    render_down,
+    render_history,
+    render_logs,
+    render_reload,
+    render_status,
+    render_up,
+)
+from .ssh import SessionAuth, capture_remote_script, remote_command, run_remote_script
 from .git_ops import push_refspec, push_revision, push_url
 
 
@@ -239,6 +249,74 @@ def reload(
             raise OperationError(target.name, exc) from exc
 
 
+_HISTORY_LINE_RE = re.compile(r"^(\S+) ([0-9a-f]{40,64}) (deploy|rollback)(?:\t(.*))?$")
+
+
+@dataclass(frozen=True)
+class DeployRecord:
+    """One entry of a target's deploy history (see remote_script.render_history)."""
+
+    timestamp: str
+    revision: str
+    kind: str
+    subject: str = ""
+
+    @property
+    def short(self) -> str:
+        return self.revision[:7]
+
+    def describe(self) -> str:
+        return f"{self.short} {self.subject}".rstrip()
+
+
+def parse_history(text: str) -> list[DeployRecord]:
+    """Turn `render_history` output into records, oldest first.
+
+    Only lines shaped like history entries count: the script runs in a
+    login shell, so anything a profile script prints is skipped rather
+    than mistaken for a deploy.
+    """
+    records = []
+    for line in text.splitlines():
+        match = _HISTORY_LINE_RE.match(line)
+        if match:
+            timestamp, revision, kind, subject = match.groups()
+            records.append(DeployRecord(timestamp, revision, kind, subject or ""))
+    return records
+
+
+def rollback_target(records: list[DeployRecord], steps: int = 1) -> tuple[DeployRecord, DeployRecord]:
+    """The ``(current, previous)`` pair a rollback of ``steps`` moves between.
+
+    Consecutive deploys of the same revision count once, so a rollback
+    always lands on a *different* revision than the current one. Raises
+    RuntimeError, with the reason, when the history can't support it.
+    """
+    distinct: list[DeployRecord] = []
+    for record in reversed(records):
+        if not distinct or distinct[-1].revision != record.revision:
+            distinct.append(record)
+    if not distinct:
+        raise RuntimeError(
+            "no deploy history on this target (deployed by an older wharf, or never deployed); "
+            "use `wharf deploy --revision <sha>` instead"
+        )
+    if steps >= len(distinct):
+        raise RuntimeError(
+            f"the history only goes back {len(distinct) - 1} distinct revision(s) before "
+            f"the current one, so it can't roll back {steps}"
+        )
+    return distinct[0], distinct[steps]
+
+
+def _read_history(
+    target: Target, auth: SessionAuth, remote_repo: str, remote_dir: str, limit: int | None,
+) -> list[DeployRecord]:
+    script = render_history(remote_repo=remote_repo, remote_dir=remote_dir, limit=limit)
+    output = capture_remote_script(target, auth, script, {}, description=f"read deploy history on {target.name}")
+    return parse_history(output)
+
+
 def status(
     config: Config,
     *,
@@ -306,3 +384,82 @@ def logs(
         except Exception as exc:  # noqa: BLE001
             raise OperationError(target.name, exc) from exc
 
+
+def history(
+    config: Config,
+    *,
+    repo: str,
+    only: tuple[str, ...] = (),
+    limit: int | None = None,
+    force_ci: bool | None = None,
+    identity: str | None = None,
+) -> None:
+    """Print each selected target's deploy history, newest first. Read-only."""
+    _check_branch(config)
+    for target in config.select_targets(only):
+        print(_header("History of", target, False))
+        remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
+        try:
+            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
+            records = _read_history(target, auth, remote_repo, remote_dir, limit)
+        except Exception as exc:  # noqa: BLE001
+            raise OperationError(target.name, exc) from exc
+        if not records:
+            print("  no deploy history recorded (deployed by an older wharf, or never deployed)")
+            continue
+        for index, record in enumerate(reversed(records)):
+            marker = "  <- current" if index == 0 else ""
+            print(f"  {record.timestamp}  {record.short}  {record.kind:<8}  {record.subject}{marker}")
+
+
+def rollback(
+    config: Config,
+    *,
+    repo: str,
+    only: tuple[str, ...] = (),
+    steps: int = 1,
+    force_ci: bool | None = None,
+    identity: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Re-deploy, on each selected target, the revision deployed before the current one.
+
+    Each target's own history decides what "before" means (see
+    :func:`rollback_target`), and the revision is checked out from the
+    bare repo already on that target: nothing is pushed, so this works
+    even where the commit no longer exists locally (a CI runner, say).
+    Otherwise it's a deploy -- the same script, ``pre_up`` included, then
+    the healthcheck -- recorded in the history as a ``rollback``.
+
+    Unlike the other dry runs, this one has to read each target's history
+    to know what it would deploy, so it does connect (read-only).
+    """
+    _check_branch(config)
+    for target in config.select_targets(only):
+        print(_header("Rolling back", target, dry_run))
+        remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
+        try:
+            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
+            records = _read_history(target, auth, remote_repo, remote_dir, None)
+            current, previous = rollback_target(records, steps)
+            print(f"{current.describe()} -> {previous.describe()} (deployed {previous.timestamp})")
+            script = render_up(
+                remote_repo=remote_repo,
+                remote_dir=remote_dir,
+                compose_file=config.compose_file_for(target),
+                secrets=config.secrets,
+                paths=target.paths,
+                pre_up=target.pre_up,
+                kind="rollback",
+            )
+            env_vars = {"REVISION": previous.revision}
+            if dry_run:
+                _show_remote_script(target, script, env_vars)
+                if target.healthcheck:
+                    print(f"Would then poll {target.healthcheck} until it responds")
+                continue
+            run_remote_script(target, auth, script, env_vars, description=f"rollback on {target.name}")
+            if target.healthcheck:
+                wait_healthy(target.healthcheck)
+        except Exception as exc:  # noqa: BLE001
+            raise OperationError(target.name, exc) from exc

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from wharf.config import PreUpStep, SecretsDefaults
-from wharf.remote_script import render_down, render_logs, render_reload, render_status, render_up
+from wharf.remote_script import render_down, render_history, render_logs, render_reload, render_status, render_up
 
 SECRETS = SecretsDefaults(
     provider="infisical",
@@ -301,6 +301,10 @@ def test_render_up_records_the_resolved_revision_once_services_are_up():
     assert resolve_index < up_index < record_index
 
 
+def test_render_up_kind_rollback_is_recorded_as_such():
+    assert '"$deployed_revision" rollback >> "$history_file"' in _up(kind="rollback")
+
+
 def test_render_status_only_reads():
     script = render_status(
         remote_repo="/srv/git/app.git", remote_dir="/opt/deploys/app",
@@ -337,6 +341,13 @@ def test_render_logs_passes_flags_and_quoted_services():
 def test_render_logs_defaults_to_the_last_100_lines_of_every_service():
     script = render_logs(remote_dir="/opt/deploys/app", compose_file="docker-compose.yml", secrets=None, paths=None)
     assert 'docker compose -f "$compose_file" logs --tail=100 </dev/null' in script
+
+
+def test_render_history_limit_keeps_the_newest_entries():
+    assert 'tail -n 5 "$history_file"' in render_history(
+        remote_repo="/srv/git/app.git", remote_dir="/opt/deploys/app", limit=5
+    )
+    assert 'cat "$history_file"' in render_history(remote_repo="/srv/git/app.git", remote_dir="/opt/deploys/app")
 
 
 @pytest.fixture
@@ -392,10 +403,10 @@ def test_up_script_appends_each_successful_deploy_to_the_history(tmp_path, fake_
 
     _run_up(bare, remote_dir, v1, **common)
     _run_up(bare, remote_dir, "main", **common)  # a ref name, recorded as v2's sha
-    _run_up(bare, remote_dir, v1, **common)
+    _run_up(bare, remote_dir, v1, kind="rollback", **common)
 
     lines = (remote_dir / ".wharf-history").read_text().splitlines()
-    assert [line.split()[1:] for line in lines] == [[v1, "deploy"], [v2, "deploy"], [v1, "deploy"]]
+    assert [line.split()[1:] for line in lines] == [[v1, "deploy"], [v2, "deploy"], [v1, "rollback"]]
     assert all(re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", line.split()[0]) for line in lines)
     assert (remote_dir / "app.txt").read_text() == "v1\n"
 
@@ -493,3 +504,29 @@ def test_logs_script_fails_clearly_on_a_never_deployed_target(tmp_path, fake_doc
     assert "not deployed" in result.stderr
     assert not fake_docker.exists()
 
+
+def test_history_script_echoes_entries_with_their_commit_subjects(tmp_path, bare_repo):
+    bare, (v1, v2) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    remote_dir.mkdir(parents=True)
+    gone = "0" * 40  # a revision the bare repo no longer has
+    (remote_dir / ".wharf-history").write_text(
+        f"2026-09-17T10:00:00Z {v1} deploy\n2026-09-17T11:00:00Z {v2} deploy\n2026-09-17T12:00:00Z {gone} rollback\n"
+    )
+
+    result = _run(render_history(remote_repo=str(bare), remote_dir=str(remote_dir)))
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        f"2026-09-17T10:00:00Z {v1} deploy\tv1\n"
+        f"2026-09-17T11:00:00Z {v2} deploy\tv2\n"
+        f"2026-09-17T12:00:00Z {gone} rollback\t\n"
+    )
+    limited = _run(render_history(remote_repo=str(bare), remote_dir=str(remote_dir), limit=1))
+    assert limited.stdout == f"2026-09-17T12:00:00Z {gone} rollback\t\n"
+
+
+def test_history_script_prints_nothing_without_a_history_file(tmp_path, bare_repo):
+    bare, _ = bare_repo
+    result = _run(render_history(remote_repo=str(bare), remote_dir=str(tmp_path / "deploys" / "app")))
+    assert (result.returncode, result.stdout) == (0, "")

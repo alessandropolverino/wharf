@@ -195,8 +195,14 @@ def test_deploy_dry_run_prints_plan_without_connecting_or_credentials(monkeypatc
     assert out.rstrip().endswith("Would then poll https://app.example.com/health until it responds")
 
 
-def test_status_parses():
+def test_status_history_rollback_parse():
     assert build_parser().parse_args(["status", "deploy.yml", "--only", "app"]).command == "status"
+    history = build_parser().parse_args(["history", "deploy.yml", "--limit", "5"])
+    assert (history.command, history.limit) == ("history", 5)
+    assert build_parser().parse_args(["history", "deploy.yml"]).limit is None
+    rollback = build_parser().parse_args(["rollback", "deploy.yml", "--steps", "2", "--dry-run"])
+    assert (rollback.command, rollback.steps, rollback.dry_run) == ("rollback", 2, True)
+    assert build_parser().parse_args(["rollback", "deploy.yml"]).steps == 1
 
 
 def test_logs_parses_services_and_flags():
@@ -214,6 +220,8 @@ def test_logs_parses_services_and_flags():
     [
         ["logs", "deploy.yml", "--tail", "x"],
         ["logs", "deploy.yml", "api;rm -rf /"],
+        ["rollback", "deploy.yml", "--steps", "0"],
+        ["history", "deploy.yml", "--limit", "abc"],
     ],
 )
 def test_invalid_values_are_usage_errors(argv, capsys):

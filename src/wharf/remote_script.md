@@ -29,9 +29,11 @@ In order:
 4. Run each `pre_up` entry: `docker compose run --rm -T --build <service>
    </dev/null`.
 5. `docker compose up -d --build --remove-orphans`.
-6. Append `<UTC timestamp> <sha> deploy` to `$remote_dir/.wharf-history`
+6. Append `<UTC timestamp> <sha> <kind>` to `$remote_dir/.wharf-history`
    — the sha as resolved by the checkout (`$REVISION` may be a tag or
-   branch name). Nothing is recorded if `pre_up` or `up` failed.
+   branch name), `kind` being `deploy`, or `rollback` when
+   [`operations.rollback`](operations.md) renders the script. Nothing is
+   recorded if `pre_up` or `up` failed.
 7. Remove any of step 2's images no longer referenced by a running
    container.
 
@@ -65,8 +67,9 @@ debugging a failed migration.
 
 ## The read-only scripts
 
-`render_status` and `render_logs` back `wharf status` and `wharf logs`.
-Neither takes the lock or writes anything:
+`render_status`, `render_logs` and `render_history` back `wharf status`,
+`wharf logs`, and `wharf history`/`wharf rollback`. None of them takes
+the lock or writes anything:
 
 - **`render_status`** prints `revision:` (the bare repo's `HEAD`, which
   `render_up`'s `checkout -f` moves), `last deploy:` (the history file's
@@ -79,6 +82,12 @@ Neither takes the lock or writes anything:
   shell-quoted, with `</dev/null` for the same reason as `pre_up`'s
   `run`. A never-deployed target is an error (exit 1) here — there is
   nothing to show.
+- **`render_history`** echoes each history line back with the
+  revision's commit subject (looked up in the bare repo; empty if the
+  commit is gone) after a tab, oldest first, optionally only the last
+  `limit` lines — the format
+  [`operations.parse_history`](operations.md) reads. No history file
+  means no output, not an error.
 
 `status` and `logs` wrap their compose command with the target's secrets
 (below) when it declares `paths`, like `up` does: compose interpolates

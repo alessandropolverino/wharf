@@ -1,7 +1,7 @@
 # `operations.py`
 
-Orchestrates the `deploy`, `down` and `reload` actions, and the
-read-only `status` and `logs`, across a config's
+Orchestrates the `deploy`, `down`, `reload` and `rollback` actions, and
+the read-only `status`, `logs` and `history`, across a config's
 targets. This is the layer between the CLI ([`cli.md`](cli.md)) and the
 per-target mechanics (script rendering in
 [`remote_script.md`](remote_script.md), SSH in [`ssh.md`](ssh.md)).
@@ -66,7 +66,11 @@ come from the same helpers the real run uses (`git_ops.push_url`/
 `push_refspec`, `ssh.remote_command`), so the preview can't drift from
 what actually runs.
 
-## Read-only actions: `status`, `logs`
+`rollback --dry-run` is the one exception: it can't know what it would
+deploy without reading each target's history, so it does connect,
+read-only, and needs the same credentials a real run would.
+
+## Read-only actions: `status`, `logs`, `history`
 
 Same per-target loop, same `SessionAuth` resolution, same `ensure_branch`
 guard — but the scripts only read (see
@@ -80,6 +84,34 @@ guard — but the scripts only read (see
   Following never returns on its own, so it's only allowed for a single
   target: the CLI checks that before calling, and the function raises
   `ValueError` otherwise.
+- **`history`** is the one action that *captures* output: it runs
+  `render_history` through `ssh.capture_remote_script`, parses the lines
+  with `parse_history`, and prints them newest first with the current
+  one marked.
+
+## `rollback(config, *, repo, only=(), steps=1, force_ci=None, identity=None, dry_run=False)`
+
+Per target: read the history (as `history` does), pick the revision with
+`rollback_target`, then run the **same deploy script** for it with
+`kind="rollback"` — `pre_up`, lock, image pruning, healthcheck, all as a
+deploy — which records itself in the history as a `rollback`. Nothing is
+pushed: the revision is already in the target's bare repo (it was
+deployed from there), which is what lets a rollback run from a CI
+runner or a fresh clone that doesn't have the commit locally.
+
+`rollback_target(records, steps)` walks the history newest-first,
+collapsing consecutive deploys of the same revision, and returns the
+`(current, previous)` pair `steps` apart — so a rollback always lands on
+a *different* revision, and after `A, B, A` the previous revision is `B`
+(history is chronological, not a stack). It raises `RuntimeError` with
+the reason when the history is empty (pointing at `deploy --revision`)
+or too short, which the loop wraps in `OperationError` like any other
+target failure.
+
+`parse_history` only accepts lines shaped like history entries
+(`<timestamp> <40–64 hex> <deploy|rollback>[<tab><subject>]`): the script
+runs in a login shell, so anything a profile script prints is skipped
+rather than mistaken for a deploy.
 
 ## Guards
 

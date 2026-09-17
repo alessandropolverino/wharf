@@ -1,5 +1,5 @@
-"""Built-in remote-side bash for wharf's up/down/reload actions and the
-read-only status/logs scripts.
+"""Built-in remote-side bash for wharf's up/down/reload/rollback actions
+and the read-only status/logs/history scripts.
 
 These replace the per-repo ``deploy_prod.sh`` script from wharf's
 predecessor: the locking, checkout, secrets-wrapping, and image-cleanup
@@ -14,10 +14,11 @@ environment variable, so the rendered script text stays identical across
 deploys of the same target and only the environment changes -- useful
 when eyeballing what actually ran in a log.
 
-Every successful ``up`` appends one line -- ``<UTC timestamp> <full sha>
-deploy`` -- to ``<remote_dir>/.wharf-history``, which is what `wharf
-status` reads back. Besides the checkout itself and the lock file, it's
-the only state wharf keeps on a target.
+Every successful ``up`` (a deploy or a rollback) appends one line --
+``<UTC timestamp> <full sha> <kind>`` -- to ``<remote_dir>/.wharf-history``,
+which is what `wharf history`, `wharf status` and `wharf rollback` read
+back. Besides the checkout itself and the lock file, it's the only state
+wharf keeps on a target.
 """
 
 from __future__ import annotations
@@ -112,6 +113,7 @@ def render_up(
     secrets: SecretsDefaults | None,
     paths: tuple[str, ...] | None,
     pre_up: tuple[PreUpStep, ...] | None = None,
+    kind: str = "deploy",
 ) -> str:
     """Deploy action: checkout $REVISION, run pre_up hooks, build, start, prune old images.
 
@@ -138,8 +140,10 @@ def render_up(
     repeated in every deploy log.
 
     Once the services are up, the deploy is appended to the target's
-    history file with the *resolved* sha -- ``$REVISION`` may be a tag or
-    branch name. A failed ``pre_up`` or ``up`` records nothing.
+    history file as ``kind`` (``deploy``, or ``rollback`` when
+    :func:`wharf.operations.rollback` re-deploys an earlier revision),
+    with the *resolved* sha -- ``$REVISION`` may be a tag or branch name.
+    A failed ``pre_up`` or ``up`` records nothing.
     """
     pre_up_commands = [
         (
@@ -178,7 +182,7 @@ mkdir -p "$remote_dir"
   cd "$remote_dir"
 {commands_block}
   echo "Services started"
-  printf '%s %s %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$deployed_revision" deploy >> "$history_file"
+  printf '%s %s %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$deployed_revision" {shlex.quote(kind)} >> "$history_file"
 
   for img_id in "${{old_images[@]+"${{old_images[@]}}"}}"; do
     docker inspect "$img_id" >/dev/null 2>&1 || continue
@@ -341,3 +345,25 @@ cd "$remote_dir"
 {logs_block}
 """
 
+
+def render_history(*, remote_repo: str, remote_dir: str, limit: int | None = None) -> str:
+    """History action: print the target's deploy history, oldest first. Read-only.
+
+    Each history line (``<timestamp> <revision> <kind>``, as appended by
+    :func:`render_up`) is echoed back with the revision's commit subject
+    looked up in the bare repo, tab-separated, for
+    :func:`wharf.operations.parse_history` to read. ``limit`` keeps only
+    the most recent entries. A target with no history file prints nothing.
+    """
+    source = f"tail -n {int(limit)}" if limit is not None else "cat"
+    return f"""\
+set -euo pipefail
+remote_repo={shlex.quote(remote_repo)}
+remote_dir={shlex.quote(remote_dir)}
+history_file="$remote_dir/{_HISTORY_FILE_NAME}"
+[ -f "$history_file" ] || exit 0
+{source} "$history_file" | while read -r timestamp revision kind _; do
+  subject=$(git --git-dir="$remote_repo" log -1 --format=%s "$revision" 2>/dev/null || true)
+  printf '%s %s %s\\t%s\\n' "$timestamp" "$revision" "${{kind:-deploy}}" "$subject"
+done
+"""

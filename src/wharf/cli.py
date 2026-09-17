@@ -5,6 +5,8 @@
     wharf reload     <config.yml> [--only NAME...] [--identity NAME] [--dry-run]
     wharf status     <config.yml> [--only NAME...] [--identity NAME]
     wharf logs       <config.yml> [SERVICE...] [--only NAME...] [--follow] [--tail N] [--since WHEN] [--identity NAME]
+    wharf history    <config.yml> [--only NAME...] [--limit N] [--identity NAME]
+    wharf rollback   <config.yml> [--only NAME...] [--steps N] [--identity NAME] [--dry-run]
     wharf ls         <config.yml>
     wharf setup      <config.yml> [--only NAME...] [--identity NAME]
     wharf rotate     <config.yml> [--only NAME...] [--identity NAME]
@@ -69,11 +71,17 @@ def _add_identity_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_dry_run_flag(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="print what would be pushed and run on each target, without connecting to any",
-    )
+def _add_dry_run_flag(
+    parser: argparse.ArgumentParser,
+    help_text: str = "print what would be pushed and run on each target, without connecting to any",
+) -> None:
+    parser.add_argument("--dry-run", action="store_true", help=help_text)
+
+
+def _positive_int(text: str) -> int:
+    if not text.isdigit() or int(text) < 1:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {text!r}")
+    return int(text)
 
 
 def _tail_count(text: str) -> str:
@@ -141,6 +149,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_ci_flags(p_logs)
     _add_identity_flag(p_logs)
+
+    p_history = subparsers.add_parser("history", help="list the revisions deployed to each target, newest first")
+    _add_common(p_history)
+    p_history.add_argument(
+        "--limit", default=None, type=_positive_int, metavar="N",
+        help="only the N most recent deploys (default: all)",
+    )
+    _add_ci_flags(p_history)
+    _add_identity_flag(p_history)
+
+    p_rollback = subparsers.add_parser(
+        "rollback", help="re-deploy the revision that was deployed before the current one",
+    )
+    _add_common(p_rollback)
+    p_rollback.add_argument(
+        "--steps", default=1, type=_positive_int, metavar="N",
+        help="go back N distinct revisions instead of 1",
+    )
+    _add_ci_flags(p_rollback)
+    _add_identity_flag(p_rollback)
+    _add_dry_run_flag(
+        p_rollback,
+        help_text="read each target's deploy history and print the rollback it would run, without deploying",
+    )
 
     p_ls = subparsers.add_parser("ls", help="list a config's targets")
     _add_common(p_ls, needs_only=False)
@@ -299,6 +331,19 @@ def _main(argv: list[str] | None) -> int:
             if args.follow:
                 return 0  # Ctrl-C is how following ends, not an interruption
             raise
+
+    if args.command == "history":
+        return _run_operation(
+            operations.history, config,
+            repo=repo, only=tuple(args.only), limit=args.limit, force_ci=force_ci, identity=args.identity,
+        )
+
+    if args.command == "rollback":
+        return _run_operation(
+            operations.rollback, config,
+            repo=repo, only=tuple(args.only), steps=args.steps,
+            force_ci=force_ci, identity=args.identity, dry_run=args.dry_run,
+        )
 
     if args.command == "deploy":
         try:
