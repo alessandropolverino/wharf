@@ -82,7 +82,9 @@ command-injection or credential-exfiltration vector — see also
   leading `-` (which could be parsed as a flag), and structurally
   anything that isn't a plausible compose service name. This is
   defense-in-depth: `remote_script.py` also `shlex.quote()`s every
-  service name at render time, independently of this regex.
+  service name at render time, independently of this regex. The
+  validator, `compose_service_name`, is public: the CLI applies it to
+  `wharf logs SERVICE...` too.
 - **`user`** must match `^[A-Za-z0-9_][A-Za-z0-9._@-]*$`. It's the first
   half of the `user@host` argument handed to `ssh`, so a leading `-`
   would be parsed as an option — `-oProxyCommand=...` runs a local

@@ -1,11 +1,13 @@
 import os
+import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from wharf.config import PreUpStep, SecretsDefaults
-from wharf.remote_script import render_down, render_reload, render_up
+from wharf.remote_script import render_down, render_logs, render_reload, render_status, render_up
 
 SECRETS = SecretsDefaults(
     provider="infisical",
@@ -277,3 +279,217 @@ def test_script_proceeds_when_the_lock_is_free(tmp_path, fake_docker):
 
     assert result.returncode == 0, result.stderr
     assert fake_docker.read_text() == "compose -f docker-compose.yml down\n"
+
+
+# --- history recording, and the read-only status/logs/history scripts ---
+
+def _up(**overrides):
+    params = dict(
+        remote_repo="/srv/git/app.git", remote_dir="/opt/deploys/app",
+        compose_file="docker-compose.yml", secrets=None, paths=None,
+    )
+    params.update(overrides)
+    return render_up(**params)
+
+
+def test_render_up_records_the_resolved_revision_once_services_are_up():
+    script = _up()
+    assert 'history_file="$remote_dir/.wharf-history"' in script
+    resolve_index = script.index('deployed_revision=$(git --git-dir="$remote_repo" rev-parse HEAD)')
+    up_index = script.index("up -d --build --remove-orphans")
+    record_index = script.index('"$deployed_revision" deploy >> "$history_file"')
+    assert resolve_index < up_index < record_index
+
+
+def test_render_status_only_reads():
+    script = render_status(
+        remote_repo="/srv/git/app.git", remote_dir="/opt/deploys/app",
+        compose_file="docker-compose.yml", secrets=None, paths=None,
+    )
+    assert "mkdir" not in script and ">>" not in script
+    assert "flock -n 200" in script and '200<"$lock_file"' in script  # a read-only descriptor
+    assert 'docker compose -f "$compose_file" ps' in script
+    assert "infisical" not in script
+
+
+def test_render_status_wraps_ps_with_secrets_when_target_has_paths():
+    script = render_status(
+        remote_repo="/srv/git/app.git", remote_dir="/opt/deploys/app",
+        compose_file="docker-compose.yml", secrets=SECRETS, paths=("/app/",),
+    )
+    assert script.count("infisical login") == 1
+    assert (
+        "infisical run --env=prod --path=/app/ --projectId=proj-123 --domain=https://eu.infisical.com "
+        '-- docker compose -f "$compose_file" ps'
+    ) in script
+
+
+def test_render_logs_passes_flags_and_quoted_services():
+    script = render_logs(
+        remote_dir="/opt/deploys/app", compose_file="docker-compose.yml", secrets=None, paths=None,
+        services=("api", "a$(id)"), follow=True, tail="all", since="30m",
+    )
+    assert (
+        'docker compose -f "$compose_file" logs --tail=all --since=30m --follow api \'a$(id)\' </dev/null'
+    ) in script
+
+
+def test_render_logs_defaults_to_the_last_100_lines_of_every_service():
+    script = render_logs(remote_dir="/opt/deploys/app", compose_file="docker-compose.yml", secrets=None, paths=None)
+    assert 'docker compose -f "$compose_file" logs --tail=100 </dev/null' in script
+
+
+@pytest.fixture
+def bare_repo(tmp_path):
+    """A bare repo holding two commits (v1, v2), like a target's remote_repo after two pushes."""
+    src = tmp_path / "src"
+    src.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(src), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    git("checkout", "-q", "-b", "main")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "test")
+    (src / "docker-compose.yml").write_text("services: {}\n")
+    shas = []
+    for version in ("v1", "v2"):
+        (src / "app.txt").write_text(version + "\n")
+        git("add", ".")
+        git("commit", "-q", "-m", version)
+        shas.append(git("rev-parse", "HEAD"))
+    bare = tmp_path / "app.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    git("push", "-q", str(bare), "HEAD:refs/heads/main")
+    return bare, shas
+
+
+def _run_up(bare: Path, remote_dir: Path, revision: str, **overrides) -> None:
+    params = dict(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml",
+        secrets=None, paths=None,
+    )
+    params.update(overrides)
+    script = render_up(**params)
+    subprocess.run(
+        ["bash", "-s"], input=script, text=True, check=True, capture_output=True,
+        env={**os.environ, "REVISION": revision},
+    )
+
+
+def _run(script: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True)
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_up_script_appends_each_successful_deploy_to_the_history(tmp_path, fake_docker, bare_repo):
+    bare, (v1, v2) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    # A compose file name the repo doesn't contain: the old-image scan that
+    # runs once it exists uses `mapfile`, which macOS's bash 3.2 lacks.
+    common = {"compose_file": "compose.other.yml"}
+
+    _run_up(bare, remote_dir, v1, **common)
+    _run_up(bare, remote_dir, "main", **common)  # a ref name, recorded as v2's sha
+    _run_up(bare, remote_dir, v1, **common)
+
+    lines = (remote_dir / ".wharf-history").read_text().splitlines()
+    assert [line.split()[1:] for line in lines] == [[v1, "deploy"], [v2, "deploy"], [v1, "deploy"]]
+    assert all(re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", line.split()[0]) for line in lines)
+    assert (remote_dir / "app.txt").read_text() == "v1\n"
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_up_script_records_nothing_when_up_fails(tmp_path, bare_repo, monkeypatch):
+    bare, (v1, _) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    failing_docker = bin_dir / "docker"
+    failing_docker.write_text("#!/bin/sh\nexit 1\n")
+    failing_docker.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _run_up(bare, remote_dir, v1, compose_file="compose.other.yml")
+
+    assert not (remote_dir / ".wharf-history").exists()
+
+
+def test_status_script_reports_a_never_deployed_target(tmp_path, bare_repo):
+    bare, _ = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    script = render_status(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml", secrets=None, paths=None,
+    )
+
+    result = _run(script)
+
+    assert result.returncode == 0
+    assert result.stdout == f"not deployed: {remote_dir} does not exist\n"
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_status_script_reports_revision_last_deploy_lock_and_services(tmp_path, fake_docker, bare_repo):
+    bare, (_, v2) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    _run_up(bare, remote_dir, v2)
+    fake_docker.write_text("")
+    script = render_status(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml", secrets=None, paths=None,
+    )
+
+    lines = _run(script).stdout.splitlines()
+
+    assert lines[0] == f"revision: {v2[:7]} v2"
+    assert lines[1].startswith("last deploy: 20") and lines[1].endswith(f"Z (deploy of {v2[:7]})")
+    assert lines[2] == "lock: free"
+    assert fake_docker.read_text() == "compose -f docker-compose.yml ps\n"
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_status_script_sees_a_lock_held_by_a_running_deploy(tmp_path, bare_repo):
+    import fcntl  # POSIX-only, like flock itself
+
+    bare, _ = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    remote_dir.mkdir(parents=True)
+    lock = remote_dir / ".wharf-deploy.lock"
+    lock.touch()
+    script = render_status(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml", secrets=None, paths=None,
+    )
+
+    with open(lock, "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        while_held = _run(script).stdout
+    after = _run(script).stdout
+
+    assert "lock: held (a deploy, down or reload is running)" in while_held
+    assert "lock: free\n" in after
+    assert "last deploy: no history recorded" in after
+    assert lock.stat().st_size == 0  # probing never wrote to it
+
+
+def test_logs_script_runs_compose_logs_in_remote_dir(tmp_path, fake_docker):
+    remote_dir = tmp_path / "deploys" / "app"
+    remote_dir.mkdir(parents=True)
+    script = render_logs(
+        remote_dir=str(remote_dir), compose_file="docker-compose.yml", secrets=None, paths=None,
+        services=("api",), tail="20",
+    )
+
+    assert _run(script).returncode == 0
+    assert fake_docker.read_text() == "compose -f docker-compose.yml logs --tail=20 api\n"
+
+
+def test_logs_script_fails_clearly_on_a_never_deployed_target(tmp_path, fake_docker):
+    script = render_logs(remote_dir=str(tmp_path / "nope"), compose_file="docker-compose.yml", secrets=None, paths=None)
+
+    result = _run(script)
+
+    assert result.returncode == 1
+    assert "not deployed" in result.stderr
+    assert not fake_docker.exists()
+

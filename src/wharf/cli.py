@@ -3,6 +3,8 @@
     wharf deploy     <config.yml> [--only NAME...] [--repo NAME] [--revision SHA] [--identity NAME] [--dry-run]
     wharf down       <config.yml> [--only NAME...] [--volumes] [--identity NAME] [--dry-run]
     wharf reload     <config.yml> [--only NAME...] [--identity NAME] [--dry-run]
+    wharf status     <config.yml> [--only NAME...] [--identity NAME]
+    wharf logs       <config.yml> [SERVICE...] [--only NAME...] [--follow] [--tail N] [--since WHEN] [--identity NAME]
     wharf ls         <config.yml>
     wharf setup      <config.yml> [--only NAME...] [--identity NAME]
     wharf rotate     <config.yml> [--only NAME...] [--identity NAME]
@@ -25,7 +27,7 @@ from pathlib import Path
 import yaml
 
 from . import __version__, operations, rotate as rotate_mod, setup as setup_mod
-from .config import Config, ConfigError, load_config
+from .config import Config, ConfigError, compose_service_name, load_config
 from .identity import InvalidIdentityError, list_identities, validate_identity_name
 from .operations import BranchMismatchError, OperationError
 from .ssh import RemoteCommandError, is_ci
@@ -74,6 +76,19 @@ def _add_dry_run_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _tail_count(text: str) -> str:
+    if text != "all" and not text.isdigit():
+        raise argparse.ArgumentTypeError(f"expected a line count or 'all', got {text!r}")
+    return text
+
+
+def _compose_service(text: str) -> str:
+    try:
+        return compose_service_name(text, "SERVICE")
+    except ConfigError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wharf", description=__doc__.splitlines()[0])
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -98,6 +113,34 @@ def build_parser() -> argparse.ArgumentParser:
     _add_ci_flags(p_reload)
     _add_identity_flag(p_reload)
     _add_dry_run_flag(p_reload)
+
+    p_status = subparsers.add_parser(
+        "status", help="show each target's checked-out revision, last deploy, deploy lock, and compose services",
+    )
+    _add_common(p_status)
+    _add_ci_flags(p_status)
+    _add_identity_flag(p_status)
+
+    p_logs = subparsers.add_parser("logs", help="show, or follow, a target's docker compose logs")
+    _add_common(p_logs)
+    p_logs.add_argument(
+        "services", nargs="*", type=_compose_service, metavar="SERVICE",
+        help="compose service(s) to show; default is all of them",
+    )
+    p_logs.add_argument(
+        "-f", "--follow", action="store_true",
+        help="keep streaming new output until Ctrl-C (one target at a time: pick it with --only)",
+    )
+    p_logs.add_argument(
+        "--tail", default="100", type=_tail_count, metavar="N",
+        help="lines to show from the end of each service's log, or 'all' (default: 100)",
+    )
+    p_logs.add_argument(
+        "--since", default=None, metavar="WHEN",
+        help="only output since this time, as docker accepts it: a timestamp, or relative like 30m or 2h",
+    )
+    _add_ci_flags(p_logs)
+    _add_identity_flag(p_logs)
 
     p_ls = subparsers.add_parser("ls", help="list a config's targets")
     _add_common(p_ls, needs_only=False)
@@ -234,6 +277,28 @@ def _main(argv: list[str] | None) -> int:
             print(f"wharf: {exc}", file=sys.stderr)
             return 1
         return 0
+
+    if args.command == "status":
+        return _run_operation(
+            operations.status, config,
+            repo=repo, only=tuple(args.only), force_ci=force_ci, identity=args.identity,
+        )
+
+    if args.command == "logs":
+        if args.follow and len(config.select_targets(tuple(args.only))) != 1:
+            print("wharf: --follow streams one target at a time; pick it with --only NAME", file=sys.stderr)
+            return 2
+        try:
+            return _run_operation(
+                operations.logs, config,
+                repo=repo, only=tuple(args.only), services=tuple(args.services),
+                follow=args.follow, tail=args.tail, since=args.since,
+                force_ci=force_ci, identity=args.identity,
+            )
+        except KeyboardInterrupt:
+            if args.follow:
+                return 0  # Ctrl-C is how following ends, not an interruption
+            raise
 
     if args.command == "deploy":
         try:

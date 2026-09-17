@@ -1,4 +1,5 @@
-"""Built-in remote-side bash for wharf's up/down/reload actions.
+"""Built-in remote-side bash for wharf's up/down/reload actions and the
+read-only status/logs scripts.
 
 These replace the per-repo ``deploy_prod.sh`` script from wharf's
 predecessor: the locking, checkout, secrets-wrapping, and image-cleanup
@@ -12,6 +13,11 @@ shell-quoted literals at render time; only ``REVISION`` travels as an
 environment variable, so the rendered script text stays identical across
 deploys of the same target and only the environment changes -- useful
 when eyeballing what actually ran in a log.
+
+Every successful ``up`` appends one line -- ``<UTC timestamp> <full sha>
+deploy`` -- to ``<remote_dir>/.wharf-history``, which is what `wharf
+status` reads back. Besides the checkout itself and the lock file, it's
+the only state wharf keeps on a target.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ import shlex
 from .config import PreUpStep, SecretsDefaults
 
 _LOCK_FILE_NAME = ".wharf-deploy.lock"
+_HISTORY_FILE_NAME = ".wharf-history"
 
 # -n: fail fast instead of queueing behind a running deploy/down/reload.
 # A blocking flock waits indefinitely behind a hung run, and a deploy
@@ -129,6 +136,10 @@ def render_up(
     The checkout is always of a bare SHA, i.e. a detached HEAD, so git's
     multi-paragraph "detached HEAD" advice is switched off rather than
     repeated in every deploy log.
+
+    Once the services are up, the deploy is appended to the target's
+    history file with the *resolved* sha -- ``$REVISION`` may be a tag or
+    branch name. A failed ``pre_up`` or ``up`` records nothing.
     """
     pre_up_commands = [
         (
@@ -148,6 +159,7 @@ remote_repo={shlex.quote(remote_repo)}
 remote_dir={shlex.quote(remote_dir)}
 compose_file={shlex.quote(compose_file)}
 lock_file="$remote_dir/{_LOCK_FILE_NAME}"
+history_file="$remote_dir/{_HISTORY_FILE_NAME}"
 mkdir -p "$remote_dir"
 
 (
@@ -160,11 +172,13 @@ mkdir -p "$remote_dir"
   fi
 
   git -c advice.detachedHead=false --work-tree="$remote_dir" --git-dir="$remote_repo" checkout -f "$REVISION"
-  echo "Code deployed to $remote_dir (revision ${{REVISION:0:7}})"
+  deployed_revision=$(git --git-dir="$remote_repo" rev-parse HEAD)
+  echo "Code deployed to $remote_dir (revision ${{deployed_revision:0:7}})"
 
   cd "$remote_dir"
 {commands_block}
   echo "Services started"
+  printf '%s %s %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$deployed_revision" deploy >> "$history_file"
 
   for img_id in "${{old_images[@]+"${{old_images[@]}}"}}"; do
     docker inspect "$img_id" >/dev/null 2>&1 || continue
@@ -225,3 +239,105 @@ mkdir -p "$remote_dir"
   echo "Reloaded"
 ) 200>>"$lock_file"
 """
+
+
+def render_status(
+    *,
+    remote_repo: str,
+    remote_dir: str,
+    compose_file: str,
+    secrets: SecretsDefaults | None,
+    paths: tuple[str, ...] | None,
+) -> str:
+    """Status action: report what's on the target, changing nothing.
+
+    Prints the checked-out revision (the bare repo's HEAD, which
+    :func:`render_up`'s `checkout -f` moves), the last history entry,
+    whether the deploy lock is held right now, and `docker compose ps`.
+    The lock is probed with a non-blocking `flock` on a *read-only*
+    descriptor, so unlike the other scripts this one never creates the
+    lock file -- or anything else. A target that was never deployed is
+    reported as such, not treated as an error.
+
+    `docker compose ps` gets the same secrets wrapping as `up` when the
+    target declares ``paths``: compose still interpolates the file for
+    `ps`, so a ``${VAR:?}`` reference would otherwise fail.
+    """
+    ps_block = _wrapped_commands_block(secrets, [('docker compose -f "$compose_file" ps', paths)])
+    return f"""\
+set -euo pipefail
+remote_repo={shlex.quote(remote_repo)}
+remote_dir={shlex.quote(remote_dir)}
+compose_file={shlex.quote(compose_file)}
+lock_file="$remote_dir/{_LOCK_FILE_NAME}"
+history_file="$remote_dir/{_HISTORY_FILE_NAME}"
+
+if [ ! -d "$remote_dir" ]; then
+  echo "not deployed: $remote_dir does not exist"
+  exit 0
+fi
+if revision=$(git --git-dir="$remote_repo" rev-parse --verify -q HEAD 2>/dev/null); then
+  echo "revision: ${{revision:0:7}} $(git --git-dir="$remote_repo" log -1 --format=%s HEAD)"
+else
+  echo "revision: nothing checked out"
+fi
+if [ -s "$history_file" ]; then
+  timestamp= deployed= kind=
+  read -r timestamp deployed kind _ < <(tail -n 1 "$history_file") || true
+  echo "last deploy: $timestamp (${{kind:-deploy}} of ${{deployed:0:7}})"
+else
+  echo "last deploy: no history recorded"
+fi
+if [ ! -e "$lock_file" ]; then
+  echo "lock: free (never taken)"
+elif ! command -v flock >/dev/null; then
+  echo "lock: unknown (flock is not installed)"
+else
+  ( flock -n 200 && echo "lock: free" || echo "lock: held (a deploy, down or reload is running)" ) 200<"$lock_file"
+fi
+if [ -f "$remote_dir/$compose_file" ]; then
+  cd "$remote_dir"
+{ps_block}
+else
+  echo "compose: $compose_file not found in $remote_dir"
+fi
+"""
+
+
+def render_logs(
+    *,
+    remote_dir: str,
+    compose_file: str,
+    secrets: SecretsDefaults | None,
+    paths: tuple[str, ...] | None,
+    services: tuple[str, ...] = (),
+    follow: bool = False,
+    tail: str = "100",
+    since: str | None = None,
+) -> str:
+    """Logs action: `docker compose logs` for a target, optionally followed.
+
+    ``tail`` (a line count, or ``all``) and ``since`` are passed through
+    to compose. Wrapped with secrets like `up` when the target declares
+    ``paths`` -- see :func:`render_status`. ``</dev/null`` for the same
+    reason as `pre_up`'s `run`: the script arrives on stdin, and a
+    long-running child must not be able to read it.
+    """
+    flags = [f"--tail={shlex.quote(tail)}"]
+    if since is not None:
+        flags.append(f"--since={shlex.quote(since)}")
+    if follow:
+        flags.append("--follow")
+    words = " ".join([*flags, *(shlex.quote(service) for service in services)])
+    logs_block = _wrapped_commands_block(
+        secrets, [(f'docker compose -f "$compose_file" logs {words} </dev/null', paths)]
+    )
+    return f"""\
+set -euo pipefail
+remote_dir={shlex.quote(remote_dir)}
+compose_file={shlex.quote(compose_file)}
+[ -d "$remote_dir" ] || {{ echo "not deployed: $remote_dir does not exist" >&2; exit 1; }}
+cd "$remote_dir"
+{logs_block}
+"""
+

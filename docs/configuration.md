@@ -280,6 +280,26 @@ wharf deploy deploy.yml            # prod
 wharf deploy deploy.staging.yml    # staging
 ```
 
+## Status and logs
+
+Every successful `deploy` appends one line to `<remote_dir>/.wharf-history`
+on the target -- `<UTC timestamp> <full sha> deploy` -- right after
+`docker compose up` succeeds. A deploy that fails in `pre_up` or `up`
+records nothing. Besides the checkout and the lock file, it's the only
+state wharf keeps on a target.
+
+`wharf status deploy.yml` shows, per target: the checked-out revision,
+the last history entry, whether the deploy lock is held right now (i.e.
+a deploy, down or reload is running), and `docker compose ps`.
+
+`wharf logs deploy.yml [SERVICE...] [--only NAME] [-f] [--tail N] [--since WHEN]`
+streams `docker compose logs` from each selected target (the last 100
+lines per service by default); `-f` follows, which only makes sense for
+one target at a time, so it needs `--only NAME` in a multi-target file.
+`status` and `logs` wrap their compose call with the target's secrets
+when it declares `paths`, since compose interpolates the file for `ps`
+and `logs` too.
+
 ## Running from CI
 
 Any CI system that sets the standard `CI` environment variable (GitHub

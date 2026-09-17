@@ -281,7 +281,8 @@ def _string_list(value: object, label: str) -> tuple[str, ...]:
     return tuple(_nonempty_string(item, f"{label}[{i}]") for i, item in enumerate(value))
 
 
-def _compose_service_name(value: object, label: str) -> str:
+def compose_service_name(value: object, label: str) -> str:
+    """Public because the CLI validates `wharf logs SERVICE...` with it too."""
     text = _nonempty_string(value, label)
     if not _COMPOSE_SERVICE_NAME_RE.fullmatch(text):
         raise ConfigError(
@@ -297,11 +298,11 @@ def _pre_up_step(value: object, index: int, label: str) -> PreUpStep:
     `paths` for just this command."""
     item_label = f"{label}[{index}]"
     if isinstance(value, str):
-        return PreUpStep(service=_compose_service_name(value, item_label))
+        return PreUpStep(service=compose_service_name(value, item_label))
     _exact_keys(value, {"service"}, optional=frozenset({"paths"}), label=item_label)
     assert isinstance(value, dict)
     return PreUpStep(
-        service=_compose_service_name(value["service"], f"{item_label}.service"),
+        service=compose_service_name(value["service"], f"{item_label}.service"),
         paths=_string_list(value["paths"], f"{item_label}.paths") if "paths" in value else None,
     )
 

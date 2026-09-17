@@ -29,7 +29,10 @@ In order:
 4. Run each `pre_up` entry: `docker compose run --rm -T --build <service>
    </dev/null`.
 5. `docker compose up -d --build --remove-orphans`.
-6. Remove any of step 2's images no longer referenced by a running
+6. Append `<UTC timestamp> <sha> deploy` to `$remote_dir/.wharf-history`
+   — the sha as resolved by the checkout (`$REVISION` may be a tag or
+   branch name). Nothing is recorded if `pre_up` or `up` failed.
+7. Remove any of step 2's images no longer referenced by a running
    container.
 
 **Why `--build` is mandatory on `pre_up`'s `run`:** `docker compose run`
@@ -59,6 +62,28 @@ debugging a failed migration.
   whatever revision is already checked out. No `pre_up` — reload doesn't
   check out a new revision, so there's nothing new to migrate. Useful
   after rotating a secret, or to just restart services.
+
+## The read-only scripts
+
+`render_status` and `render_logs` back `wharf status` and `wharf logs`.
+Neither takes the lock or writes anything:
+
+- **`render_status`** prints `revision:` (the bare repo's `HEAD`, which
+  `render_up`'s `checkout -f` moves), `last deploy:` (the history file's
+  last line), `lock:`, and `docker compose ps`. The lock is probed with
+  `flock -n` on a descriptor opened *read-only* (`200<"$lock_file"`), so
+  a status check never creates the lock file; a target that was never
+  deployed prints `not deployed:` and exits 0.
+- **`render_logs`** runs `docker compose logs` with the `--tail`,
+  `--since`, `--follow` and service arguments it was given, all
+  shell-quoted, with `</dev/null` for the same reason as `pre_up`'s
+  `run`. A never-deployed target is an error (exit 1) here — there is
+  nothing to show.
+
+`status` and `logs` wrap their compose command with the target's secrets
+(below) when it declares `paths`, like `up` does: compose interpolates
+the file for `ps` and `logs` too, so a `${VAR:?}` reference would
+otherwise fail.
 
 ## Secrets injection
 

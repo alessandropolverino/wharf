@@ -1,6 +1,7 @@
 # `operations.py`
 
-Orchestrates the `deploy`, `down`, and `reload` actions across a config's
+Orchestrates the `deploy`, `down` and `reload` actions, and the
+read-only `status` and `logs`, across a config's
 targets. This is the layer between the CLI ([`cli.md`](cli.md)) and the
 per-target mechanics (script rendering in
 [`remote_script.md`](remote_script.md), SSH in [`ssh.md`](ssh.md)).
@@ -64,6 +65,21 @@ network connection. The push URL/refspec and the remote command line
 come from the same helpers the real run uses (`git_ops.push_url`/
 `push_refspec`, `ssh.remote_command`), so the preview can't drift from
 what actually runs.
+
+## Read-only actions: `status`, `logs`
+
+Same per-target loop, same `SessionAuth` resolution, same `ensure_branch`
+guard — but the scripts only read (see
+[`remote_script.md`](remote_script.md#the-read-only-scripts)):
+
+- **`status`** streams `render_status`'s report: the bare repo's `HEAD`
+  (what the last checkout left), the last history entry, whether the
+  deploy lock is held, and `docker compose ps`.
+- **`logs`** streams `render_logs` — `docker compose logs` with
+  `--tail`/`--since`/`--follow` and any service names passed through.
+  Following never returns on its own, so it's only allowed for a single
+  target: the CLI checks that before calling, and the function raises
+  `ValueError` otherwise.
 
 ## Guards
 

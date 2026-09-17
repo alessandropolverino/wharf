@@ -8,6 +8,8 @@ the `python -m wharf` equivalent).
 wharf deploy     <config.yml> [--only NAME...] [--repo NAME] [--revision SHA] [--identity NAME] [--dry-run]
 wharf down       <config.yml> [--only NAME...] [--volumes] [--identity NAME] [--dry-run]
 wharf reload     <config.yml> [--only NAME...] [--identity NAME] [--dry-run]
+wharf status     <config.yml> [--only NAME...] [--identity NAME]
+wharf logs       <config.yml> [SERVICE...] [--only NAME...] [--follow] [--tail N] [--since WHEN] [--identity NAME]
 wharf ls         <config.yml>
 wharf setup      <config.yml> [--only NAME...] [--identity NAME]
 wharf rotate     <config.yml> [--only NAME...] [--identity NAME]
@@ -38,7 +40,11 @@ uses.
    `--version`), shared flags factored into `_add_common` (`config`,
    `--only`, `--repo`), `_add_ci_flags` (`--ci`/`--interactive`,
    mutually exclusive), `_add_identity_flag` (`--identity`), and
-   `_add_dry_run_flag` (`--dry-run`).
+   `_add_dry_run_flag` (`--dry-run`). Values with a shape are checked by
+   argparse `type=` functions — `_tail_count` (`--tail`: a count or
+   `all`) and `_compose_service` (`logs`' `SERVICE` arguments, via
+   `config.compose_service_name`) — so a bad value is a usage error, not
+   a remote failure.
 2. `main(argv)` dispatches on `args.command` (via `_main`; `main` itself
    only turns Ctrl-C into a one-line `wharf: interrupted` and exit code
    130 instead of a traceback):
@@ -59,6 +65,11 @@ uses.
      `deploy` first infers the revision (`git rev-parse HEAD`) unless
      `--revision` is given; outside a git checkout (or in one with no
      commits) that's a one-line error and exit 2, not a traceback.
+   - `status` and `logs` go through `_run_operation` the same way.
+     `logs --follow` is checked up front to select exactly one target
+     (following never returns on its own), and a Ctrl-C while following
+     is the normal way to stop, so it exits 0 quietly rather than
+     `wharf: interrupted` / 130.
 3. Before dispatching (except for `ls` and `identities`), a best-effort, silent-on-failure
    [`update_check`](update_check.md) runs — skipped in CI and when
    `WHARF_NO_UPDATE_CHECK` is set, so it never adds an unexpected network

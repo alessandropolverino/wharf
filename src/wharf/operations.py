@@ -8,6 +8,8 @@ piling more changes on top of a broken deploy.
 
 Each action also has a dry-run mode that prints, per target, exactly what
 would be pushed and piped to the target's shell, without connecting.
+
+``status`` and ``logs`` are read-only views of a target.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from pathlib import Path
 
 from .config import Config, Target, render_repo_template
 from .healthcheck import wait_healthy
-from .remote_script import render_down, render_reload, render_up
+from .remote_script import render_down, render_logs, render_reload, render_status, render_up
 from .ssh import SessionAuth, remote_command, run_remote_script
 from .git_ops import push_refspec, push_revision, push_url
 
@@ -235,3 +237,72 @@ def reload(
                 wait_healthy(target.healthcheck)
         except Exception as exc:  # noqa: BLE001
             raise OperationError(target.name, exc) from exc
+
+
+def status(
+    config: Config,
+    *,
+    repo: str,
+    only: tuple[str, ...] = (),
+    force_ci: bool | None = None,
+    identity: str | None = None,
+) -> None:
+    """Report each selected target's checked-out revision, last deploy, lock, and services. Read-only."""
+    _check_branch(config)
+    for target in config.select_targets(only):
+        print(_header("Status of", target, False))
+        remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
+        try:
+            script = render_status(
+                remote_repo=remote_repo,
+                remote_dir=remote_dir,
+                compose_file=config.compose_file_for(target),
+                secrets=config.secrets,
+                paths=target.paths,
+            )
+            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
+            run_remote_script(target, auth, script, {}, description=f"status on {target.name}")
+        except Exception as exc:  # noqa: BLE001
+            raise OperationError(target.name, exc) from exc
+
+
+def logs(
+    config: Config,
+    *,
+    repo: str,
+    only: tuple[str, ...] = (),
+    services: tuple[str, ...] = (),
+    follow: bool = False,
+    tail: str = "100",
+    since: str | None = None,
+    force_ci: bool | None = None,
+    identity: str | None = None,
+) -> None:
+    """Show (or follow) each selected target's compose logs. Read-only.
+
+    Following never returns on its own, so it's only allowed for a single
+    target -- the CLI checks that before getting here.
+    """
+    _check_branch(config)
+    targets = config.select_targets(only)
+    if follow and len(targets) != 1:
+        raise ValueError("--follow streams one target at a time")
+    for target in targets:
+        print(_header("Logs from", target, False))
+        _, remote_dir = _remote_repo_and_dir(config, target, repo)
+        try:
+            script = render_logs(
+                remote_dir=remote_dir,
+                compose_file=config.compose_file_for(target),
+                secrets=config.secrets,
+                paths=target.paths,
+                services=services,
+                follow=follow,
+                tail=tail,
+                since=since,
+            )
+            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
+            run_remote_script(target, auth, script, {}, description=f"logs on {target.name}")
+        except Exception as exc:  # noqa: BLE001
+            raise OperationError(target.name, exc) from exc
+

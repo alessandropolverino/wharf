@@ -60,6 +60,10 @@ wharf down deploy.yml --volumes
 
 # restart without rebuilding (e.g. after rotating a secret):
 wharf reload deploy.yml
+
+# see what's checked out and running on each target, or tail one target's logs:
+wharf status deploy.yml
+wharf logs deploy.yml --only app -f
 ```
 
 Run the exact same `wharf deploy deploy.yml` from a GitHub Actions
@@ -77,6 +81,8 @@ the full docs index (config reference + per-file code reference).
 | `wharf deploy <config.yml>` | Push the current revision, build, and start each target in order. |
 | `wharf down <config.yml> [--volumes]` | Stop each target; `--volumes` also removes its volumes. |
 | `wharf reload <config.yml>` | Re-run compose without rebuilding, picks up rotated secrets or just restarts. |
+| `wharf status <config.yml>` | Show each target's checked-out revision, last deploy, deploy lock, and `docker compose ps`. |
+| `wharf logs <config.yml> [SERVICE...]` | Show a target's `docker compose logs`; `-f` follows one target, `--tail N` / `--since WHEN` narrow it. |
 | `wharf ls <config.yml>` | List a config's targets and their order, without connecting to anything. |
 | `wharf setup <config.yml>` | Bootstrap: generate a deploy keypair, create bare repos, authorize the key. |
 | `wharf rotate <config.yml>` | Replace an identity's deploy key everywhere, removing the old `authorized_keys` entry. |

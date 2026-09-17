@@ -50,6 +50,10 @@ need. `down` skips the push/checkout/healthcheck entirely, `reload`
 skips the push and `pre_up` (nothing new to migrate if no new revision
 was checked out).
 
+`status` and `logs` are read-only: one ssh call each, running a script
+that only looks (`git rev-parse` in the bare repo, `docker compose
+ps`/`logs`, the deploy history file).
+
 ## No registry — git *is* the delivery mechanism
 
 The classic compose deploy needs a registry: build an image, push it,
@@ -80,6 +84,7 @@ you'd cloned the repo there by hand.
 | Old images pile up after every rebuild. | **Automatic pruning**: after a successful `up --build`, any image that was running *before* the deploy and isn't referenced by a running container anymore gets `docker rmi`'d. |
 | No readiness signal. | Optional **healthcheck polling** after `deploy`/`reload`, from outside the target. |
 | Nothing to review before it runs on the host. | **`--dry-run`** on `deploy`/`down`/`reload` prints the exact `git push` and bash script each target would get, without connecting — see [`operations.md`](../src/wharf/operations.md#dry-run). |
+| Seeing what's running means ssh-ing in by hand. | **`wharf status`** (checked-out revision, last deploy, whether the deploy lock is held, `docker compose ps`) and **`wharf logs`** (`docker compose logs`, optionally followed) per target. |
 | — | **CI-aware auth**: the same config and the same `wharf deploy` command work unchanged from a laptop (agent/interactive auth) or a CI runner (`DEPLOY_SSH_KEY`, batch mode) — see [`configuration.md`](configuration.md#local-vs-ci-auth). |
 
 ## What wharf deliberately does *not* do

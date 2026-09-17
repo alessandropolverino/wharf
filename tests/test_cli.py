@@ -19,6 +19,15 @@ targets:
     host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIONdCvpb2NyLGGzZ6xmFdOyqzmEQziCRgRAPiJ5OmBeg
     order: 10
 """
+TWO_TARGETS = CONFIG_TEXT + """\
+  - name: worker
+    remote_dir: /opt/deploys/{repo}/worker
+    host: 203.0.113.11
+    port: 22
+    user: deploy
+    host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIONdCvpb2NyLGGzZ6xmFdOyqzmEQziCRgRAPiJ5OmBeg
+    order: 20
+"""
 
 
 def test_identities_reports_missing_public_key_instead_of_crashing(tmp_path, monkeypatch, capsys):
@@ -184,3 +193,50 @@ def test_deploy_dry_run_prints_plan_without_connecting_or_credentials(monkeypatc
     assert "Would run on deploy@203.0.113.10 (port 22): REVISION=abc123 bash -l -s <<'WHARF_SCRIPT'" in out
     assert "remote_dir=/opt/deploys/myapp/app" in out
     assert out.rstrip().endswith("Would then poll https://app.example.com/health until it responds")
+
+
+def test_status_parses():
+    assert build_parser().parse_args(["status", "deploy.yml", "--only", "app"]).command == "status"
+
+
+def test_logs_parses_services_and_flags():
+    args = build_parser().parse_args(
+        ["logs", "deploy.yml", "api", "worker", "--only", "app", "-f", "--tail", "all", "--since", "30m"]
+    )
+    assert args.services == ["api", "worker"]
+    assert (args.only, args.follow, args.tail, args.since) == (["app"], True, "all", "30m")
+    defaults = build_parser().parse_args(["logs", "deploy.yml"])
+    assert (defaults.services, defaults.follow, defaults.tail, defaults.since) == ([], False, "100", None)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["logs", "deploy.yml", "--tail", "x"],
+        ["logs", "deploy.yml", "api;rm -rf /"],
+    ],
+)
+def test_invalid_values_are_usage_errors(argv, capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(argv)
+    assert excinfo.value.code == 2
+
+
+def test_logs_follow_needs_exactly_one_target(capsys, offline, write_config):
+    config = write_config(TWO_TARGETS)
+
+    assert main(["logs", str(config), "--follow", "--repo", "app"]) == 2
+    assert "one target at a time" in capsys.readouterr().err
+
+
+def test_logs_follow_ends_quietly_on_ctrl_c(capsys, offline, write_config, monkeypatch):
+    config = write_config(CONFIG_TEXT)
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(operations, "logs", interrupted)
+
+    assert main(["logs", str(config), "--follow", "--repo", "app"]) == 0
+    assert main(["logs", str(config), "--repo", "app"]) == 130  # without --follow it is an interruption
+    assert capsys.readouterr().err.count("wharf: interrupted") == 1
