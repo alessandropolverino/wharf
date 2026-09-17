@@ -212,6 +212,16 @@ def run_streaming(
         raise RemoteCommandError(description, result.returncode)
 
 
+def remote_command(env_vars: dict[str, str]) -> list[str]:
+    """The remote command line :func:`run_remote_script` hands to `ssh`.
+
+    Also what `--dry-run` prints, so the preview can't drift from what
+    actually runs.
+    """
+    prefix = [f"{key}={shlex.quote(value)}" for key, value in env_vars.items()]
+    return prefix + ["bash", "-l", "-s"]
+
+
 def run_remote_script(
     target: Target,
     auth: SessionAuth,
@@ -235,7 +245,5 @@ def run_remote_script(
     plain non-login ``bash -s`` would silently skip that and leave those
     variables unset.
     """
-    argv = build_ssh_argv(target, auth)
-    prefix = [f"{key}={shlex.quote(value)}" for key, value in env_vars.items()]
-    argv += prefix + ["bash", "-l", "-s"]
+    argv = build_ssh_argv(target, auth) + remote_command(env_vars)
     run_streaming(argv, description=description, input_text=script)

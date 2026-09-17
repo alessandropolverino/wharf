@@ -148,6 +148,9 @@ targets:
 
 ```
 wharf deploy deploy.yml
+
+# or first, to see exactly what that would push and run, without connecting:
+wharf deploy deploy.yml --dry-run
 ```
 
 ### 2. Multiple targets, sequential rollout

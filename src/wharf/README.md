@@ -30,9 +30,9 @@ cli.py
  ├─ identity.py           list_identities
  ├─ operations.py         deploy / down / reload
  │   ├─ config.py         (select_targets, compose_file_for, render_repo_template)
- │   ├─ git_ops.py         push_revision  ──┐
+ │   ├─ git_ops.py         push_revision  ──┐   (push_url, push_refspec for --dry-run)
  │   ├─ remote_script.py   render_up/down/reload
- │   ├─ ssh.py              SessionAuth, run_remote_script  ◄┘ (both go over SSH)
+ │   ├─ ssh.py              SessionAuth, run_remote_script  ◄┘ (both go over SSH; remote_command for --dry-run)
  │   │   └─ identity.py     key_paths, resolve_identity (named-identity local auth)
  │   └─ healthcheck.py      wait_healthy
  ├─ setup.py               setup

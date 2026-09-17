@@ -23,6 +23,11 @@ def push_url(target: Target, remote_repo: str) -> str:
     return f"ssh://{target.user}@{target.address}{remote_repo}"
 
 
+def push_refspec(revision: str, branch: str) -> str:
+    """Push ``revision`` as ``branch`` on the target's bare repo."""
+    return f"{revision}:refs/heads/{branch}"
+
+
 def push_revision(
     target: Target,
     remote_repo: str,
@@ -31,6 +36,6 @@ def push_revision(
     auth: SessionAuth,
 ) -> None:
     """`git push` ``revision`` to ``remote_repo`` on ``target``."""
-    argv = ["git", "push", push_url(target, remote_repo), f"{revision}:refs/heads/{branch}"]
+    argv = ["git", "push", push_url(target, remote_repo), push_refspec(revision, branch)]
     env = {"GIT_SSH_COMMAND": build_git_ssh_command(target, auth)}
     run_streaming(argv, description=f"git push to {target.name}", env=env)

@@ -1,8 +1,9 @@
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from wharf import operations, setup as setup_mod
+from wharf import __version__, operations, setup as setup_mod
 from wharf.cli import build_parser, main
 from wharf.identity import generate_keypair, key_comment, key_paths
 
@@ -83,6 +84,19 @@ def offline(monkeypatch):
     monkeypatch.delenv("CI", raising=False)
 
 
+def test_version_flag(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--version"])
+    assert excinfo.value.code == 0
+    assert capsys.readouterr().out.strip() == f"wharf {__version__}"
+
+
+def test_dry_run_flag_parses_for_deploy_down_reload():
+    for command in ("deploy", "down", "reload"):
+        assert build_parser().parse_args([command, "deploy.yml", "--dry-run"]).dry_run is True
+        assert build_parser().parse_args([command, "deploy.yml"]).dry_run is False
+
+
 @pytest.mark.parametrize("command", ["deploy", "down", "reload", "setup", "rotate"])
 def test_unknown_only_target_is_a_clean_config_error(tmp_path, monkeypatch, capsys, offline, write_config, command):
     monkeypatch.chdir(tmp_path)
@@ -148,3 +162,25 @@ def test_ctrl_c_exits_130_without_a_traceback(monkeypatch, capsys, offline, writ
 
     assert main(["down", str(config), "--repo", "app"]) == 130
     assert "wharf: interrupted" in capsys.readouterr().err
+
+
+def test_deploy_dry_run_prints_plan_without_connecting_or_credentials(monkeypatch, capsys, write_config):
+    # CI mode with no DEPLOY_SSH_KEY: a real deploy would fail on auth.
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.delenv("DEPLOY_SSH_KEY", raising=False)
+    config = write_config(CONFIG_TEXT.replace("order: 10\n", "order: 10\n    healthcheck: https://app.example.com/health\n"))
+
+    def no_subprocesses(*args, **kwargs):
+        raise AssertionError("dry run must not run anything")
+
+    monkeypatch.setattr(subprocess, "run", no_subprocesses)
+
+    exit_code = main(["deploy", str(config), "--dry-run", "--repo", "myapp", "--revision", "abc123"])
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "==> [dry run] Deploying app (203.0.113.10:22)" in out
+    assert "Would run locally: git push ssh://deploy@203.0.113.10:22/srv/git/myapp.git abc123:refs/heads/main" in out
+    assert "Would run on deploy@203.0.113.10 (port 22): REVISION=abc123 bash -l -s <<'WHARF_SCRIPT'" in out
+    assert "remote_dir=/opt/deploys/myapp/app" in out
+    assert out.rstrip().endswith("Would then poll https://app.example.com/health until it responds")

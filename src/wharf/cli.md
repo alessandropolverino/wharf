@@ -5,18 +5,23 @@ up as the `wharf` console script (see [`__main__.md`](__main__.md) for
 the `python -m wharf` equivalent).
 
 ```
-wharf deploy     <config.yml> [--only NAME...] [--repo NAME] [--revision SHA] [--identity NAME]
-wharf down       <config.yml> [--only NAME...] [--volumes] [--identity NAME]
-wharf reload     <config.yml> [--only NAME...] [--identity NAME]
+wharf deploy     <config.yml> [--only NAME...] [--repo NAME] [--revision SHA] [--identity NAME] [--dry-run]
+wharf down       <config.yml> [--only NAME...] [--volumes] [--identity NAME] [--dry-run]
+wharf reload     <config.yml> [--only NAME...] [--identity NAME] [--dry-run]
 wharf ls         <config.yml>
 wharf setup      <config.yml> [--only NAME...] [--identity NAME]
 wharf rotate     <config.yml> [--only NAME...] [--identity NAME]
 wharf identities
+wharf --version
 ```
 
 Every subcommand except `ls` and `identities` also accepts
 `--ci`/`--interactive` to override wharf's automatic CI-vs-local
 detection (see [`ssh.md`](ssh.md)'s `is_ci`).
+
+`--dry-run` (on `deploy`/`down`/`reload`, added by `_add_dry_run_flag`)
+prints each target's `git push` and remote script instead of running
+them — see [`operations.md`](operations.md#dry-run).
 
 `rotate` and `identities` follow the same subparser pattern as the
 other commands — `rotate` takes the same `<config.yml> [--only]
@@ -29,10 +34,11 @@ uses.
 
 ## Flow
 
-1. `build_parser()` — the full argparse tree, shared flags factored into
-   `_add_common` (`config`, `--only`, `--repo`), `_add_ci_flags`
-   (`--ci`/`--interactive`, mutually exclusive), and `_add_identity_flag`
-   (`--identity`).
+1. `build_parser()` — the full argparse tree (plus a top-level
+   `--version`), shared flags factored into `_add_common` (`config`,
+   `--only`, `--repo`), `_add_ci_flags` (`--ci`/`--interactive`,
+   mutually exclusive), `_add_identity_flag` (`--identity`), and
+   `_add_dry_run_flag` (`--dry-run`).
 2. `main(argv)` dispatches on `args.command` (via `_main`; `main` itself
    only turns Ctrl-C into a one-line `wharf: interrupted` and exit code
    130 instead of a traceback):

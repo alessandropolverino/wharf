@@ -77,7 +77,10 @@ all show up live, exactly as if you'd typed the command yourself. Raises
 Runs a rendered script (from [`remote_script.md`](remote_script.md)) via
 `ssh ... KEY=value... bash -l -s`, piped over stdin. `env_vars` (e.g.
 `REVISION`) are set as a shell-level prefix on the remote command line,
-the same technique the original per-repo deploy scripts used.
+the same technique the original per-repo deploy scripts used. That
+remote command line comes from `remote_command(env_vars)`, which
+[`operations`](operations.md)' dry run prints too, so the preview can't
+drift from what actually runs.
 
 **`-l` (login shell) is required, not cosmetic**: it's what makes bash
 source `/etc/profile.d/*.sh` before running the script — where

@@ -52,6 +52,9 @@ wharf deploy deploy.yml
 # see what a config would do, without touching anything:
 wharf ls deploy.yml
 
+# preview the exact push and script each target would run, without connecting:
+wharf deploy deploy.yml --dry-run
+
 # stop everything (optionally wiping volumes):
 wharf down deploy.yml --volumes
 
@@ -78,12 +81,16 @@ the full docs index (config reference + per-file code reference).
 | `wharf setup <config.yml>` | Bootstrap: generate a deploy keypair, create bare repos, authorize the key. |
 | `wharf rotate <config.yml>` | Replace an identity's deploy key everywhere, removing the old `authorized_keys` entry. |
 | `wharf identities` | List locally known deploy-key identities and their key files (local only). |
+| `wharf --version` | Print the installed wharf version. |
 
 All commands except `ls` and `identities` accept `--only NAME`
 (repeatable) to act on a subset of targets, `--repo NAME` to override
 the inferred project name, and `--identity NAME` to pick which named
 deploy-key identity to use (default: `ci` in CI, `default` otherwise).
-`deploy` also accepts `--revision SHA`. See
+`deploy` also accepts `--revision SHA`, and `deploy`, `down`, and
+`reload` accept `--dry-run`, which prints the `git push` and the exact
+script each target would run without connecting to anything (so it
+needs no credentials either). See
 [docs/configuration.md](docs/configuration.md) for the full config
 reference, worked examples, identities and rotation, and how local vs.
 CI auth is handled.

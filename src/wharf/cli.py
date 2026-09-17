@@ -1,12 +1,13 @@
 """wharf's command-line interface.
 
-    wharf deploy     <config.yml> [--only NAME...] [--repo NAME] [--revision SHA] [--identity NAME]
-    wharf down       <config.yml> [--only NAME...] [--volumes] [--identity NAME]
-    wharf reload     <config.yml> [--only NAME...] [--identity NAME]
+    wharf deploy     <config.yml> [--only NAME...] [--repo NAME] [--revision SHA] [--identity NAME] [--dry-run]
+    wharf down       <config.yml> [--only NAME...] [--volumes] [--identity NAME] [--dry-run]
+    wharf reload     <config.yml> [--only NAME...] [--identity NAME] [--dry-run]
     wharf ls         <config.yml>
     wharf setup      <config.yml> [--only NAME...] [--identity NAME]
     wharf rotate     <config.yml> [--only NAME...] [--identity NAME]
     wharf identities
+    wharf --version
 
 Every subcommand except ``ls`` and ``identities`` accepts
 ``--ci``/``--interactive`` to override wharf's automatic CI-vs-local
@@ -23,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from . import operations, rotate as rotate_mod, setup as setup_mod
+from . import __version__, operations, rotate as rotate_mod, setup as setup_mod
 from .config import Config, ConfigError, load_config
 from .identity import InvalidIdentityError, list_identities, validate_identity_name
 from .operations import BranchMismatchError, OperationError
@@ -66,8 +67,16 @@ def _add_identity_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_dry_run_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="print what would be pushed and run on each target, without connecting to any",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wharf", description=__doc__.splitlines()[0])
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_deploy = subparsers.add_parser("deploy", help="push, build, and start each target")
@@ -75,17 +84,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_deploy.add_argument("--revision", default=None, help="commit SHA to deploy; defaults to HEAD")
     _add_ci_flags(p_deploy)
     _add_identity_flag(p_deploy)
+    _add_dry_run_flag(p_deploy)
 
     p_down = subparsers.add_parser("down", help="stop each target")
     _add_common(p_down)
     p_down.add_argument("--volumes", action="store_true", help="also remove named/anonymous volumes")
     _add_ci_flags(p_down)
     _add_identity_flag(p_down)
+    _add_dry_run_flag(p_down)
 
     p_reload = subparsers.add_parser("reload", help="re-apply compose without rebuilding")
     _add_common(p_reload)
     _add_ci_flags(p_reload)
     _add_identity_flag(p_reload)
+    _add_dry_run_flag(p_reload)
 
     p_ls = subparsers.add_parser("ls", help="list a config's targets")
     _add_common(p_ls, needs_only=False)
@@ -236,18 +248,21 @@ def _main(argv: list[str] | None) -> int:
         return _run_operation(
             operations.deploy, config,
             repo=repo, revision=revision, only=tuple(args.only), force_ci=force_ci, identity=args.identity,
+            dry_run=args.dry_run,
         )
 
     if args.command == "down":
         return _run_operation(
             operations.down, config,
             repo=repo, only=tuple(args.only), volumes=args.volumes, force_ci=force_ci, identity=args.identity,
+            dry_run=args.dry_run,
         )
 
     if args.command == "reload":
         return _run_operation(
             operations.reload, config,
             repo=repo, only=tuple(args.only), force_ci=force_ci, identity=args.identity,
+            dry_run=args.dry_run,
         )
 
     raise AssertionError(f"unhandled command: {args.command}")
