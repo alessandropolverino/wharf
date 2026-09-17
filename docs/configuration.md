@@ -374,9 +374,12 @@ until you run it again.
 
 `wharf rotate --only TARGET` promotes the new key to the local live key
 file as soon as the selected target(s) confirm the swap, even though
-targets you didn't select still only trust the old key -- run `rotate`
-again (with `--only` for the rest, or with no `--only` at all) before
-deploying to those targets, or they'll reject the now-local key.
+targets you didn't select still only trust the old key (wharf prints a
+warning naming them). Run `wharf rotate` again **without** `--only`
+before deploying to those targets, or they'll reject the now-local key.
+Don't finish with `--only` for the rest: nothing is staged any more, so
+that run generates *another* new key, and the targets you rotated first
+would then reject it instead.
 
 `wharf identities` reads only local key files under `.wharf/` -- it does
 not check what's actually authorized on any target.

@@ -195,6 +195,17 @@ def test_rotate_defaults_to_ci_identity_in_ci(tmp_path, monkeypatch, write_confi
     assert not (tmp_path / ".wharf" / "deploy_key").exists()
 
 
+TWO_TARGETS = CONFIG_TEXT + """\
+  - name: worker
+    remote_dir: /opt/deploys/{repo}/worker
+    host: 203.0.113.11
+    port: 22
+    user: deploy
+    host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIONdCvpb2NyLGGzZ6xmFdOyqzmEQziCRgRAPiJ5OmBeg
+    order: 20
+"""
+
+
 def test_rotate_rejects_unknown_only_target_before_staging_a_key(tmp_path, monkeypatch, write_config):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CI", raising=False)
@@ -205,3 +216,32 @@ def test_rotate_rejects_unknown_only_target_before_staging_a_key(tmp_path, monke
         rotate_module.rotate(config, repo="app", identity="ci", only=("typo",))
 
     assert not (tmp_path / ".wharf").exists()
+
+
+def test_rotate_with_only_warns_about_targets_left_on_the_old_key(tmp_path, monkeypatch, write_config, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CI", raising=False)
+    config = load_config(write_config(TWO_TARGETS))
+    calls = []
+    monkeypatch.setattr(
+        rotate_module, "_rotate_target",
+        lambda target, new_public_key, marker_pattern: calls.append(target.name),
+    )
+
+    rotate_module.rotate(config, repo="app", identity="ci", only=("app",))
+
+    out = capsys.readouterr().out
+    assert calls == ["app"]
+    assert "WARNING: not rotated (excluded by --only): worker" in out
+    assert "without --only" in out
+
+
+def test_rotate_of_every_target_prints_no_warning(tmp_path, monkeypatch, write_config, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CI", raising=False)
+    config = load_config(write_config(TWO_TARGETS))
+    monkeypatch.setattr(rotate_module, "_rotate_target", lambda *a, **k: None)
+
+    rotate_module.rotate(config, repo="app", identity="ci", only=("worker", "app"))
+
+    assert "WARNING" not in capsys.readouterr().out

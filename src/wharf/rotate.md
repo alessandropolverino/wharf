@@ -56,3 +56,12 @@ Targets are selected *before* a staged key is generated, so an unknown
 `--only` name raises `ConfigError` without leaving a staged key behind
 (which `wharf identities` would otherwise report as an interrupted
 rotation).
+
+## Partial rotations (`--only`)
+
+Promotion happens even when `--only` selected just some targets, so the
+targets it skipped still trust only the key that was just replaced.
+`rotate()` ends by printing a warning naming them. The fix is to re-run
+`wharf rotate` **without** `--only`: a second `--only` run for the
+remaining targets would stage (and promote) *yet another* key — nothing
+is staged any more — stranding the targets rotated the first time.

@@ -129,3 +129,15 @@ def rotate(
     print("Rotation complete. Remaining manual step:")
     print("  Update your CI's DEPLOY_SSH_KEY secret with the new key, e.g.:")
     print(f"    gh secret set DEPLOY_SSH_KEY < {live_private}")
+
+    selected = {target.name for target in targets}
+    skipped = [target.name for target in config.targets if target.name not in selected]
+    if skipped:
+        # A follow-up `rotate --only <the rest>` would stage yet another
+        # key (this one is live now, nothing is staged), leaving the
+        # targets rotated just now on a key that's no longer local.
+        print()
+        print(f"WARNING: not rotated (excluded by --only): {', '.join(skipped)}")
+        print("  They still trust only the key this rotation just replaced, so they'll reject the new one.")
+        print("  Re-run `wharf rotate` without --only to move every target onto one new key -- another")
+        print("  --only run would generate yet another key and strand the targets rotated just now.")
