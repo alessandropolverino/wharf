@@ -1,3 +1,9 @@
+import os
+import shutil
+import subprocess
+
+import pytest
+
 from wharf.config import PreUpStep, SecretsDefaults
 from wharf.remote_script import render_down, render_reload, render_up
 
@@ -209,3 +215,65 @@ def test_render_up_without_pre_up_matches_no_pre_up_behavior():
         paths=None,
     )
     assert "run --rm" not in script
+
+
+def _all_scripts(remote_dir: str = "/opt/deploys/app") -> dict[str, str]:
+    return {
+        "up": render_up(
+            remote_repo="/srv/git/app.git", remote_dir=remote_dir,
+            compose_file="docker-compose.yml", secrets=None, paths=None,
+        ),
+        "down": render_down(remote_dir=remote_dir, compose_file="docker-compose.yml", volumes=False),
+        "reload": render_reload(remote_dir=remote_dir, compose_file="docker-compose.yml", secrets=None, paths=None),
+    }
+
+
+@pytest.mark.parametrize("action", ["up", "down", "reload"])
+def test_every_script_takes_the_deploy_lock_without_waiting(action):
+    # Blocking flock (no -n) would queue behind a running -- or hung --
+    # deploy instead of aborting as documented.
+    script = _all_scripts()[action]
+    assert "flock -n -x 200 ||" in script
+    assert script.rstrip().endswith(') 200>>"$lock_file"')
+
+
+@pytest.fixture
+def fake_docker(tmp_path, monkeypatch):
+    """A `docker` on PATH that only logs its arguments."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "docker.log"
+    docker = bin_dir / "docker"
+    docker.write_text(f'#!/bin/sh\necho "$*" >> {log}\n')
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    return log
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_script_aborts_immediately_while_another_run_holds_the_lock(tmp_path, fake_docker):
+    import fcntl  # POSIX-only, like flock itself
+
+    remote_dir = tmp_path / "app"
+    remote_dir.mkdir()
+    script = _all_scripts(str(remote_dir))["down"]
+
+    with open(remote_dir / ".wharf-deploy.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        # timeout: a blocking flock would hang here instead of failing
+        result = subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True, timeout=10)
+
+    assert result.returncode == 1
+    assert "another wharf deploy/down/reload holds" in result.stderr
+    assert not fake_docker.exists()  # never reached `docker compose down`
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_script_proceeds_when_the_lock_is_free(tmp_path, fake_docker):
+    remote_dir = tmp_path / "app"
+    script = _all_scripts(str(remote_dir))["down"]
+
+    result = subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True, timeout=10)
+
+    assert result.returncode == 0, result.stderr
+    assert fake_docker.read_text() == "compose -f docker-compose.yml down\n"

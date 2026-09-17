@@ -18,8 +18,9 @@ eyeballing what actually ran in a log.
 
 In order:
 
-1. `flock` the deploy lock file — a concurrent deploy on the same
-   `remote_dir` aborts loudly instead of racing.
+1. `flock -n` the deploy lock file — a concurrent deploy on the same
+   `remote_dir` aborts immediately instead of racing or queueing (see
+   [Locking](#locking)).
 2. Record the currently-running image IDs (for cleanup at the end).
 3. `git checkout -f $REVISION` into `remote_dir` from the bare repo
    pushed by [`git_ops.md`](git_ops.md).
@@ -96,7 +97,14 @@ INFISICAL_TOKEN="$infisical_token" infisical run --env=<env> --path=<path> ... -
 
 ## Locking
 
-Every script wraps its body in `( flock -x 200 || exit 1; ...) 200>>"$lock_file"`,
+Every script wraps its body in `( flock -n -x 200 || exit 1; ...) 200>>"$lock_file"`,
 where `$lock_file` is `$remote_dir/.wharf-deploy.lock`. A concurrent
-`deploy`/`down`/`reload` on the same target fails fast with "deploy lock
-is held" instead of corrupting state.
+`deploy`/`down`/`reload` on the same target fails fast ("another wharf
+deploy/down/reload holds <lock file> on this target, aborting") instead
+of corrupting state.
+
+`-n` (non-blocking) is deliberate. A blocking `flock` would wait
+indefinitely behind a hung run, and a deploy queued behind another one
+would check out its revision *afterwards* — silently rolling the target
+back if the revision that just went out was newer. Re-run the aborted
+command once the other one has finished.
