@@ -294,8 +294,9 @@ what these commands read:
   deploy, down or reload is running), and `docker compose ps`.
 - `wharf history deploy.yml [--limit N]` -- the history, newest first.
 - `wharf rollback deploy.yml [--steps N]` -- re-deploys the revision that
-  was deployed *before* the current one; consecutive deploys of the same
-  revision count once, and `--steps 2` goes one further back. It's a
+  was deployed *before* the current one; each revision counts once, at
+  its most recent deploy, so a rollback never lands on what's already
+  running, and `--steps 2` goes one further back. It's a
   normal deploy of that revision -- same script, `pre_up` included,
   healthcheck after -- except nothing is pushed: the target's bare repo
   already has the commit, so it works from a CI runner or a fresh clone

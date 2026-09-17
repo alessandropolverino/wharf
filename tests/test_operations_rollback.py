@@ -69,6 +69,14 @@ def test_rollback_after_a_rollback_goes_forward_again():
     assert (current.revision, previous.revision) == (V1, V2)
 
 
+def test_rollback_steps_never_land_on_the_current_revision():
+    # v1, v2, v3, then a rollback to v2: two steps back from v2 is v1, not v2 again.
+    records = _records(V1, V2, V3) + [DeployRecord("t3", V2, "rollback")]
+    assert rollback_target(records, 2)[1].revision == V1
+    with pytest.raises(RuntimeError, match="only goes back 2 distinct"):
+        rollback_target(records, 3)
+
+
 def test_rollback_target_explains_why_it_cannot():
     with pytest.raises(RuntimeError, match="no deploy history"):
         rollback_target([])

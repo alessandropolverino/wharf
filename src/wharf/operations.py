@@ -288,13 +288,16 @@ def parse_history(text: str) -> list[DeployRecord]:
 def rollback_target(records: list[DeployRecord], steps: int = 1) -> tuple[DeployRecord, DeployRecord]:
     """The ``(current, previous)`` pair a rollback of ``steps`` moves between.
 
-    Consecutive deploys of the same revision count once, so a rollback
-    always lands on a *different* revision than the current one. Raises
+    Each revision counts once, at its most recent deploy, so a rollback
+    never lands on the current revision: after ``v1, v2, v3`` and a
+    rollback to ``v2``, two steps back is ``v1``, not ``v2`` again. Raises
     RuntimeError, with the reason, when the history can't support it.
     """
     distinct: list[DeployRecord] = []
+    seen: set[str] = set()
     for record in reversed(records):
-        if not distinct or distinct[-1].revision != record.revision:
+        if record.revision not in seen:
+            seen.add(record.revision)
             distinct.append(record)
     if not distinct:
         raise RuntimeError(

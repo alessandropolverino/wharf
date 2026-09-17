@@ -100,9 +100,9 @@ deployed from there), which is what lets a rollback run from a CI
 runner or a fresh clone that doesn't have the commit locally.
 
 `rollback_target(records, steps)` walks the history newest-first,
-collapsing consecutive deploys of the same revision, and returns the
-`(current, previous)` pair `steps` apart — so a rollback always lands on
-a *different* revision, and after `A, B, A` the previous revision is `B`
+counting each revision once (at its most recent deploy), and returns the
+`(current, previous)` pair `steps` apart — so a rollback never lands on
+the current revision, and after `A, B, A` the previous revision is `B`
 (history is chronological, not a stack). It raises `RuntimeError` with
 the reason when the history is empty (pointing at `deploy --revision`)
 or too short, which the loop wraps in `OperationError` like any other
