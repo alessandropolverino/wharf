@@ -1,12 +1,13 @@
 """wharf's command-line interface.
 
-    wharf deploy     <config.yml> [--only NAME...] [--repo NAME] [--revision SHA] [--identity NAME]
-    wharf down       <config.yml> [--only NAME...] [--volumes] [--identity NAME]
-    wharf reload     <config.yml> [--only NAME...] [--identity NAME]
+    wharf deploy     <config.yml> [--only NAME...] [--repo NAME] [--revision SHA] [--identity NAME] [--dry-run]
+    wharf down       <config.yml> [--only NAME...] [--volumes] [--identity NAME] [--dry-run]
+    wharf reload     <config.yml> [--only NAME...] [--identity NAME] [--dry-run]
     wharf ls         <config.yml>
     wharf setup      <config.yml> [--only NAME...] [--identity NAME]
     wharf rotate     <config.yml> [--only NAME...] [--identity NAME]
     wharf identities
+    wharf --version
 
 Every subcommand except ``ls`` and ``identities`` accepts
 ``--ci``/``--interactive`` to override wharf's automatic CI-vs-local
@@ -23,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from . import operations, rotate as rotate_mod, setup as setup_mod
+from . import __version__, operations, rotate as rotate_mod, setup as setup_mod
 from .config import Config, ConfigError, load_config
 from .identity import InvalidIdentityError, list_identities, validate_identity_name
 from .operations import BranchMismatchError, OperationError
@@ -66,8 +67,16 @@ def _add_identity_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_dry_run_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="print what would be pushed and run on each target, without connecting to any",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="wharf", description=__doc__.splitlines()[0])
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_deploy = subparsers.add_parser("deploy", help="push, build, and start each target")
@@ -75,17 +84,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_deploy.add_argument("--revision", default=None, help="commit SHA to deploy; defaults to HEAD")
     _add_ci_flags(p_deploy)
     _add_identity_flag(p_deploy)
+    _add_dry_run_flag(p_deploy)
 
     p_down = subparsers.add_parser("down", help="stop each target")
     _add_common(p_down)
     p_down.add_argument("--volumes", action="store_true", help="also remove named/anonymous volumes")
     _add_ci_flags(p_down)
     _add_identity_flag(p_down)
+    _add_dry_run_flag(p_down)
 
     p_reload = subparsers.add_parser("reload", help="re-apply compose without rebuilding")
     _add_common(p_reload)
     _add_ci_flags(p_reload)
     _add_identity_flag(p_reload)
+    _add_dry_run_flag(p_reload)
 
     p_ls = subparsers.add_parser("ls", help="list a config's targets")
     _add_common(p_ls, needs_only=False)
@@ -111,12 +123,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load(config_path: Path) -> Config:
+def _load(config_path: Path, only: list[str] | None = None) -> Config:
     try:
-        return load_config(config_path)
-    except (ConfigError, OSError, yaml.YAMLError) as exc:
+        config = load_config(config_path)
+        # Checked up front so an --only typo is a clean config error before
+        # anything runs (or any key is generated), not a traceback.
+        config.select_targets(tuple(only or ()))
+    except (ConfigError, OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         print(f"wharf: {config_path}: {exc}", file=sys.stderr)
         raise SystemExit(2)
+    return config
 
 
 def _fingerprint(public_key: Path) -> str:
@@ -149,6 +165,14 @@ def _run_operation(fn, *args, **kwargs) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        print("\nwharf: interrupted", file=sys.stderr)
+        return 130
+
+
+def _main(argv: list[str] | None) -> int:
     args = build_parser().parse_args(argv)
 
     if getattr(args, "identity", None) is not None:
@@ -163,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         for target in config.targets:
             secrets_note = " [secrets]" if target.uses_secrets else ""
             healthcheck_note = f" -> {target.healthcheck}" if target.healthcheck else ""
-            print(f"{target.order:>4}  {target.name:<20} {target.user}@{target.host}:{target.port}{secrets_note}{healthcheck_note}")
+            print(f"{target.order:>4}  {target.name:<20} {target.user}@{target.address}{secrets_note}{healthcheck_note}")
         return 0
 
     if args.command == "identities":
@@ -188,59 +212,57 @@ def main(argv: list[str] | None = None) -> int:
         if notice:
             print(notice, file=sys.stderr)
 
-    if args.command == "setup":
-        config = _load(args.config)
-        repo = _resolve_repo(args)
-        try:
-            setup_mod.setup(
-                config, repo=repo, only=tuple(args.only),
-                identity=args.identity, force_ci=_force_ci(args),
-            )
-        except BranchMismatchError as exc:
-            print(f"wharf: {exc}", file=sys.stderr)
-            return 2
-        except RemoteCommandError as exc:
-            print(f"wharf: {exc}", file=sys.stderr)
-            return exc.returncode
-        return 0
-
-    if args.command == "rotate":
-        config = _load(args.config)
-        repo = _resolve_repo(args)
-        try:
-            rotate_mod.rotate(
-                config, repo=repo, only=tuple(args.only),
-                identity=args.identity, force_ci=_force_ci(args),
-            )
-        except BranchMismatchError as exc:
-            print(f"wharf: {exc}", file=sys.stderr)
-            return 2
-        except RemoteCommandError as exc:
-            print(f"wharf: {exc}", file=sys.stderr)
-            return exc.returncode
-        return 0
-
-    config = _load(args.config)
+    config = _load(args.config, args.only)
     repo = _resolve_repo(args)
     force_ci = _force_ci(args)
 
+    if args.command in ("setup", "rotate"):
+        bootstrap = setup_mod.setup if args.command == "setup" else rotate_mod.rotate
+        try:
+            bootstrap(
+                config, repo=repo, only=tuple(args.only),
+                identity=args.identity, force_ci=force_ci,
+            )
+        except BranchMismatchError as exc:
+            print(f"wharf: {exc}", file=sys.stderr)
+            return 2
+        except RemoteCommandError as exc:
+            print(f"wharf: {exc}", file=sys.stderr)
+            return exc.returncode
+        except (subprocess.CalledProcessError, OSError) as exc:
+            # local failures, e.g. ssh-keygen missing or failing
+            print(f"wharf: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
     if args.command == "deploy":
-        revision = args.revision or operations.infer_revision()
+        try:
+            revision = args.revision or operations.infer_revision()
+        except (subprocess.CalledProcessError, OSError):
+            print(
+                "wharf: could not determine the revision to deploy -- run wharf from a git "
+                "checkout with at least one commit, or pass --revision SHA",
+                file=sys.stderr,
+            )
+            return 2
         return _run_operation(
             operations.deploy, config,
             repo=repo, revision=revision, only=tuple(args.only), force_ci=force_ci, identity=args.identity,
+            dry_run=args.dry_run,
         )
 
     if args.command == "down":
         return _run_operation(
             operations.down, config,
             repo=repo, only=tuple(args.only), volumes=args.volumes, force_ci=force_ci, identity=args.identity,
+            dry_run=args.dry_run,
         )
 
     if args.command == "reload":
         return _run_operation(
             operations.reload, config,
             repo=repo, only=tuple(args.only), force_ci=force_ci, identity=args.identity,
+            dry_run=args.dry_run,
         )
 
     raise AssertionError(f"unhandled command: {args.command}")

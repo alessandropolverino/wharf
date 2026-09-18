@@ -23,10 +23,12 @@ writing to `.wharf/deploy_key` exactly as `wharf setup` has always done.
 
 ## `setup(config, *, repo, only=(), identity=None, force_ci=None)`
 
-Resolves the identity (`identity.resolve_identity` — explicit
-`--identity`, else `"ci"` in CI, else `"default"`), ensures that
-identity's keypair exists, then for each selected target,
-`_provision_target`:
+Selects the targets first — so an unknown `--only` name raises
+`ConfigError` before any key is generated — then resolves the identity
+(`identity.resolve_identity` — explicit `--identity`, else `"ci"` in CI,
+else `"default"`), ensures that identity's keypair exists, and for each
+selected target runs `_provision_target`, which pipes
+`_render_setup_script`'s output over SSH:
 
 1. Opens an interactive SSH session (`bash -s`) using the operator's own
    identity.
@@ -36,6 +38,14 @@ identity's keypair exists, then for each selected target,
    `~/.ssh/authorized_keys` (creating it with `700`/`600` permissions if
    needed), idempotently — `grep -qxF` first to avoid duplicate entries
    on repeated runs.
+
+**Trailing-newline repair:** if `authorized_keys` doesn't end in a
+newline (common with hand-edited files), one is added before appending.
+Otherwise `echo >>` would glue the deploy key onto the last line: the
+deploy key wouldn't be authorized despite the success message, and if
+that last line had no comment, its base64 key blob would be corrupted —
+locking out whoever it belongs to. (`rotate` doesn't need this: its
+`grep -v` pass always newline-terminates its output.)
 
 **Shell-injection note:** `remote_repo`, `remote_dir`, and `target.name`
 are all `shlex.quote()`d before being interpolated into the script.

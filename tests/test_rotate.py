@@ -3,7 +3,7 @@ import subprocess
 import pytest
 
 from wharf import rotate as rotate_module
-from wharf.config import load_config
+from wharf.config import ConfigError, load_config
 from wharf.identity import generate_keypair, key_comment, key_paths, staged_key_paths
 from wharf.rotate import _render_rotate_script
 from wharf.ssh import RemoteCommandError
@@ -100,6 +100,20 @@ def test_rotate_script_is_idempotent(tmp_path, monkeypatch):
     assert lines.count(new_key) == 1
 
 
+def test_rotate_script_handles_authorized_keys_without_trailing_newline(tmp_path, monkeypatch):
+    # grep terminates its last output line, so the appended key can't be
+    # glued onto a final line that lacked a newline (the bug `setup` had).
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir()
+    (ssh_dir / "authorized_keys").write_text("ssh-ed25519 AAAAOLD wharf:ci\nssh-ed25519 AAAAHUMAN")
+    new_key = "ssh-ed25519 AAAANEW wharf:ci"
+
+    subprocess.run(["bash", "-s"], input=_render_rotate_script(new_key, " wharf:ci$", "app"), text=True, check=True)
+
+    assert (ssh_dir / "authorized_keys").read_text() == f"ssh-ed25519 AAAAHUMAN\n{new_key}\n"
+
+
 # --- rotate(): staging/promotion orchestration, with _rotate_target
 # faked out so no real SSH happens ---
 
@@ -179,3 +193,55 @@ def test_rotate_defaults_to_ci_identity_in_ci(tmp_path, monkeypatch, write_confi
     rotate_module.rotate(config, repo="app")
 
     assert not (tmp_path / ".wharf" / "deploy_key").exists()
+
+
+TWO_TARGETS = CONFIG_TEXT + """\
+  - name: worker
+    remote_dir: /opt/deploys/{repo}/worker
+    host: 203.0.113.11
+    port: 22
+    user: deploy
+    host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIONdCvpb2NyLGGzZ6xmFdOyqzmEQziCRgRAPiJ5OmBeg
+    order: 20
+"""
+
+
+def test_rotate_rejects_unknown_only_target_before_staging_a_key(tmp_path, monkeypatch, write_config):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CI", raising=False)
+    config = load_config(write_config(CONFIG_TEXT))
+    monkeypatch.setattr(rotate_module, "_rotate_target", lambda *a, **k: None)
+
+    with pytest.raises(ConfigError, match="typo"):
+        rotate_module.rotate(config, repo="app", identity="ci", only=("typo",))
+
+    assert not (tmp_path / ".wharf").exists()
+
+
+def test_rotate_with_only_warns_about_targets_left_on_the_old_key(tmp_path, monkeypatch, write_config, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CI", raising=False)
+    config = load_config(write_config(TWO_TARGETS))
+    calls = []
+    monkeypatch.setattr(
+        rotate_module, "_rotate_target",
+        lambda target, new_public_key, marker_pattern: calls.append(target.name),
+    )
+
+    rotate_module.rotate(config, repo="app", identity="ci", only=("app",))
+
+    out = capsys.readouterr().out
+    assert calls == ["app"]
+    assert "WARNING: not rotated (excluded by --only): worker" in out
+    assert "without --only" in out
+
+
+def test_rotate_of_every_target_prints_no_warning(tmp_path, monkeypatch, write_config, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CI", raising=False)
+    config = load_config(write_config(TWO_TARGETS))
+    monkeypatch.setattr(rotate_module, "_rotate_target", lambda *a, **k: None)
+
+    rotate_module.rotate(config, repo="app", identity="ci", only=("worker", "app"))
+
+    assert "WARNING" not in capsys.readouterr().out

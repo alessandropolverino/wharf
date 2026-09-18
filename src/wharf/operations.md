@@ -15,31 +15,55 @@ changes on top of a broken deploy. This is the tool's only rollout
 strategy — see [`how-it-works.md`](../../docs/how-it-works.md) for why that's
 an intentional simplicity trade-off.
 
-## `deploy(config, *, repo, revision, only=(), force_ci=None)`
+## `deploy(config, *, repo, revision, only=(), force_ci=None, identity=None, dry_run=False)`
 
 Per target, in order:
 
-1. Resolve `SessionAuth` (local vs. CI — see [`ssh.md`](ssh.md)).
-2. `push_revision` — `git push` the revision to the target's bare repo
+1. `render_up` the deploy script.
+2. Resolve `SessionAuth` (local vs. CI — see [`ssh.md`](ssh.md)).
+3. `push_revision` — `git push` the revision to the target's bare repo
    (see [`git_ops.md`](git_ops.md)).
-3. `render_up` the deploy script and run it over SSH.
-4. If the target declares `healthcheck`, poll it (see
+4. Run the deploy script over SSH.
+5. If the target declares `healthcheck`, poll it (see
    [`healthcheck.md`](healthcheck.md)).
 
 Any exception during a target's steps is wrapped in `OperationError`,
 which carries the target's name so the CLI can report *which* target
 failed.
 
-## `down(config, *, repo, only=(), volumes=False, force_ci=None)`
+## `down(config, *, repo, only=(), volumes=False, force_ci=None, identity=None, dry_run=False)`
 
 Same per-target loop, running the `render_down` script (stop, optionally
 `--volumes`). No git push, no secrets, no healthcheck.
 
-## `reload(config, *, repo, only=(), force_ci=None)`
+## `reload(config, *, repo, only=(), force_ci=None, identity=None, dry_run=False)`
 
 Same loop again, running `render_reload` (re-apply compose, no rebuild,
 no `pre_up`) — then a healthcheck if configured. No git push: reload acts
 on whatever revision is already checked out on the target.
+
+## Dry run
+
+With `dry_run=True` (the CLI's `--dry-run`), each action still runs its
+local guards (`_check_branch`, `--only` selection) and renders every
+target's script, but prints instead of executing:
+
+```
+==> [dry run] Deploying app (203.0.113.10:22)
+Would run locally: git push ssh://deploy@203.0.113.10:22/srv/git/myapp.git <sha>:refs/heads/main
+Would run on deploy@203.0.113.10 (port 22): REVISION=<sha> bash -l -s <<'WHARF_SCRIPT'
+set -euo pipefail
+...
+WHARF_SCRIPT
+Would then poll https://app.example.com/health until it responds
+```
+
+`SessionAuth.resolve` is never called, so a dry run needs no
+credentials (no `DEPLOY_SSH_KEY`, no local identity key) and makes no
+network connection. The push URL/refspec and the remote command line
+come from the same helpers the real run uses (`git_ops.push_url`/
+`push_refspec`, `ssh.remote_command`), so the preview can't drift from
+what actually runs.
 
 ## Guards
 
@@ -49,7 +73,9 @@ on whatever revision is already checked out on the target.
   e.g. running a prod config from a feature branch by accident. Raises
   `BranchMismatchError`.
 - **`infer_repo_name`** — the `{repo}` template value: the `origin`
-  remote's URL basename, falling back to the cwd's name. This is what
+  remote's URL basename (the last `/`- or `:`-separated component, so
+  scp-style `git@host:name.git` works too), falling back to the cwd's
+  name when there's no `origin` or no `git` at all. This is what
   lets the *same* config file work identically from a laptop or a CI
   runner — both resolve to the same project name because both operate on
   a checkout of the same repo.

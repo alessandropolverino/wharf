@@ -49,12 +49,20 @@ committed in the config. Combined with `StrictHostKeyChecking=yes`, an
 unrecognized or mismatched host key hard-fails the connection instead of
 prompting or silently trusting it.
 
-`build_ssh_argv` builds a full `ssh ...` argv including the destination.
-`build_git_ssh_command` builds the same options **without** a
-destination, for `GIT_SSH_COMMAND` — git appends its own `[-p port]
-user@host <command>` onto that string itself, so baking a destination
-into it too would make ssh see two destinations and treat the second as
-a remote command to execute.
+Each pinned file is removed at process exit (via `atexit`, like the CI
+key file) rather than right after use: `GIT_SSH_COMMAND` only carries
+the path, and git reads the file later, from its own `ssh` child.
+
+`build_ssh_argv` builds a full `ssh ...` argv including the destination,
+preceded by `--` so the `user@host` argument can never be parsed as an
+option — a `user` of `-oProxyCommand=...` would otherwise make ssh run
+that command locally. ([`config.md`](config.md) already rejects such
+user names; this is the second layer.) `build_git_ssh_command` builds
+the same options **without** a destination (and without `--`), for
+`GIT_SSH_COMMAND` — git appends its own `[-p port] user@host <command>`
+onto that string itself, so baking a destination into it too would make
+ssh see two destinations and treat the second as a remote command to
+execute.
 
 ## `run_streaming(argv, *, description, env=None, input_text=None)`
 
@@ -69,7 +77,10 @@ all show up live, exactly as if you'd typed the command yourself. Raises
 Runs a rendered script (from [`remote_script.md`](remote_script.md)) via
 `ssh ... KEY=value... bash -l -s`, piped over stdin. `env_vars` (e.g.
 `REVISION`) are set as a shell-level prefix on the remote command line,
-the same technique the original per-repo deploy scripts used.
+the same technique the original per-repo deploy scripts used. That
+remote command line comes from `remote_command(env_vars)`, which
+[`operations`](operations.md)' dry run prints too, so the preview can't
+drift from what actually runs.
 
 **`-l` (login shell) is required, not cosmetic**: it's what makes bash
 source `/etc/profile.d/*.sh` before running the script — where

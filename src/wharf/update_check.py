@@ -17,11 +17,9 @@ from urllib.error import URLError
 
 from . import __version__
 
-# Note: the GitHub REST API requires authentication to read releases on a
-# private repo, which this repo currently is -- until it's made public (or
-# this module is given a token), check_for_update() will always fail closed
-# via the except clause below and never report anything. That's fine: it's
-# still a silent no-op, exactly like every other failure mode here.
+# Unauthenticated: the repo is public, so reading its releases needs no
+# token. Hitting GitHub's unauthenticated rate limit (60 requests/hour per
+# IP) fails closed via the except clause below, like any other failure.
 GITHUB_REPO = "alessandropolverino/wharf"
 _RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _TIMEOUT_SECONDS = 2.0

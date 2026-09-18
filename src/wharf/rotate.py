@@ -107,6 +107,9 @@ def rotate(
     to pick up and continue from.
     """
     _check_branch(config)
+    # Selected before staging anything, so an --only typo can't leave a
+    # staged key behind that looks like an interrupted rotation.
+    targets = config.select_targets(only)
     ci = is_ci() if force_ci is None else force_ci
     resolved_identity = resolve_identity(identity, is_ci=ci)
 
@@ -115,8 +118,8 @@ def rotate(
     new_public_key = staged_public.read_text().strip()
     marker_pattern = f" {key_comment(resolved_identity)}$"
 
-    for target in config.select_targets(only):
-        print(f"==> Rotating '{resolved_identity}' on {target.name} ({target.host}:{target.port})")
+    for target in targets:
+        print(f"==> Rotating '{resolved_identity}' on {target.name} ({target.address})")
         _rotate_target(target, new_public_key, marker_pattern)
 
     staged_private.rename(live_private)
@@ -126,3 +129,15 @@ def rotate(
     print("Rotation complete. Remaining manual step:")
     print("  Update your CI's DEPLOY_SSH_KEY secret with the new key, e.g.:")
     print(f"    gh secret set DEPLOY_SSH_KEY < {live_private}")
+
+    selected = {target.name for target in targets}
+    skipped = [target.name for target in config.targets if target.name not in selected]
+    if skipped:
+        # A follow-up `rotate --only <the rest>` would stage yet another
+        # key (this one is live now, nothing is staged), leaving the
+        # targets rotated just now on a key that's no longer local.
+        print()
+        print(f"WARNING: not rotated (excluded by --only): {', '.join(skipped)}")
+        print("  They still trust only the key this rotation just replaced, so they'll reject the new one.")
+        print("  Re-run `wharf rotate` without --only to move every target onto one new key -- another")
+        print("  --only run would generate yet another key and strand the targets rotated just now.")

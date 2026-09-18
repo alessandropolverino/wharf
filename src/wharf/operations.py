@@ -5,18 +5,22 @@ parallel rollout strategy (mirrors the original scripts' "sequential"
 strategy, which was the only one ever used). The first target that
 fails stops the run: later targets are left untouched rather than
 piling more changes on top of a broken deploy.
+
+Each action also has a dry-run mode that prints, per target, exactly what
+would be pushed and piped to the target's shell, without connecting.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
 from .config import Config, Target, render_repo_template
 from .healthcheck import wait_healthy
 from .remote_script import render_down, render_reload, render_up
-from .ssh import SessionAuth, run_remote_script
-from .git_ops import push_revision
+from .ssh import SessionAuth, remote_command, run_remote_script
+from .git_ops import push_refspec, push_revision, push_url
 
 
 class OperationError(RuntimeError):
@@ -66,15 +70,19 @@ def infer_repo_name(cwd: Path | None = None) -> str:
     Prefers the ``origin`` remote's URL basename (works the same way
     locally and in CI, where the checkout is a clone of that remote);
     falls back to the working directory's name if there's no remote
-    configured (e.g. a fresh local-only repo).
+    configured (e.g. a fresh local-only repo) or no `git` to ask.
     """
-    result = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
-        cwd=cwd, capture_output=True, text=True,
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        url = result.stdout.strip()
-        name = url.rstrip("/").rsplit("/", 1)[-1]
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=cwd, capture_output=True, text=True,
+        )
+    except OSError:
+        result = None
+    url = result.stdout.strip() if result is not None and result.returncode == 0 else ""
+    if url:
+        # The last component of ".../owner/name.git" or scp-style "host:name.git".
+        name = re.split(r"[/:]", url.rstrip("/"))[-1]
         return name[:-4] if name.endswith(".git") else name
     return Path(cwd or Path.cwd()).resolve().name
 
@@ -94,6 +102,23 @@ def _remote_repo_and_dir(config: Config, target: Target, repo: str) -> tuple[str
     return remote_repo, remote_dir
 
 
+def _header(verb: str, target: Target, dry_run: bool) -> str:
+    prefix = "[dry run] " if dry_run else ""
+    return f"==> {prefix}{verb} {target.name} ({target.address})"
+
+
+def _show_remote_script(target: Target, script: str, env_vars: dict[str, str]) -> None:
+    """Dry run: print what :func:`run_remote_script` would pipe to ``target``.
+
+    Framed as a heredoc because that's exactly what happens: the script is
+    fed to the remote shell's stdin.
+    """
+    command = " ".join(remote_command(env_vars))
+    print(f"Would run on {target.user}@{target.host} (port {target.port}): {command} <<'WHARF_SCRIPT'")
+    print(script, end="")
+    print("WHARF_SCRIPT")
+
+
 def deploy(
     config: Config,
     *,
@@ -102,15 +127,18 @@ def deploy(
     only: tuple[str, ...] = (),
     force_ci: bool | None = None,
     identity: str | None = None,
+    dry_run: bool = False,
 ) -> None:
-    """Push, checkout, build, and healthcheck each selected target in order."""
+    """Push, checkout, build, and healthcheck each selected target in order.
+
+    With ``dry_run``, print each target's push and deploy script instead:
+    nothing is connected to, so no credentials are needed either.
+    """
     _check_branch(config)
     for target in config.select_targets(only):
-        print(f"==> Deploying {target.name} ({target.host}:{target.port})")
+        print(_header("Deploying", target, dry_run))
         remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
         try:
-            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
-            push_revision(target, remote_repo, config.branch, revision, auth)
             script = render_up(
                 remote_repo=remote_repo,
                 remote_dir=remote_dir,
@@ -119,8 +147,18 @@ def deploy(
                 paths=target.paths,
                 pre_up=target.pre_up,
             )
+            env_vars = {"REVISION": revision}
+            if dry_run:
+                push = f"git push {push_url(target, remote_repo)} {push_refspec(revision, config.branch)}"
+                print(f"Would run locally: {push}")
+                _show_remote_script(target, script, env_vars)
+                if target.healthcheck:
+                    print(f"Would then poll {target.healthcheck} until it responds")
+                continue
+            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
+            push_revision(target, remote_repo, config.branch, revision, auth)
             run_remote_script(
-                target, auth, script, {"REVISION": revision},
+                target, auth, script, env_vars,
                 description=f"deploy on {target.name}",
             )
             if target.healthcheck:
@@ -137,19 +175,23 @@ def down(
     volumes: bool = False,
     force_ci: bool | None = None,
     identity: str | None = None,
+    dry_run: bool = False,
 ) -> None:
     """Stop (and optionally wipe volumes for) each selected target."""
     _check_branch(config)
     for target in config.select_targets(only):
-        print(f"==> Stopping {target.name} ({target.host}:{target.port})")
+        print(_header("Stopping", target, dry_run))
         _, remote_dir = _remote_repo_and_dir(config, target, repo)
         try:
-            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
             script = render_down(
                 remote_dir=remote_dir,
                 compose_file=config.compose_file_for(target),
                 volumes=volumes,
             )
+            if dry_run:
+                _show_remote_script(target, script, {})
+                continue
+            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
             run_remote_script(
                 target, auth, script, {},
                 description=f"down on {target.name}",
@@ -165,20 +207,26 @@ def reload(
     only: tuple[str, ...] = (),
     force_ci: bool | None = None,
     identity: str | None = None,
+    dry_run: bool = False,
 ) -> None:
     """Re-apply compose (no rebuild) for each selected target."""
     _check_branch(config)
     for target in config.select_targets(only):
-        print(f"==> Reloading {target.name} ({target.host}:{target.port})")
+        print(_header("Reloading", target, dry_run))
         _, remote_dir = _remote_repo_and_dir(config, target, repo)
         try:
-            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
             script = render_reload(
                 remote_dir=remote_dir,
                 compose_file=config.compose_file_for(target),
                 secrets=config.secrets,
                 paths=target.paths,
             )
+            if dry_run:
+                _show_remote_script(target, script, {})
+                if target.healthcheck:
+                    print(f"Would then poll {target.healthcheck} until it responds")
+                continue
+            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
             run_remote_script(
                 target, auth, script, {},
                 description=f"reload on {target.name}",

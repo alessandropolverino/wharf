@@ -22,6 +22,15 @@ from .config import PreUpStep, SecretsDefaults
 
 _LOCK_FILE_NAME = ".wharf-deploy.lock"
 
+# -n: fail fast instead of queueing behind a running deploy/down/reload.
+# A blocking flock waits indefinitely behind a hung run, and a deploy
+# queued behind another one would check out its revision afterwards --
+# silently rolling back if the revision that just went out is newer.
+_ACQUIRE_LOCK = (
+    'flock -n -x 200 || { echo "ERROR: another wharf deploy/down/reload holds '
+    '$lock_file on this target, aborting" >&2; exit 1; }'
+)
+
 
 def _secrets_login(secrets: SecretsDefaults) -> str:
     """The one-time `infisical login` call for a script.
@@ -116,6 +125,10 @@ def render_up(
     Each step's own ``paths`` (if set) scope its secrets injection
     independently of the target's ``paths``, which is what the final
     ``up`` command always uses.
+
+    The checkout is always of a bare SHA, i.e. a detached HEAD, so git's
+    multi-paragraph "detached HEAD" advice is switched off rather than
+    repeated in every deploy log.
     """
     pre_up_commands = [
         (
@@ -138,7 +151,7 @@ lock_file="$remote_dir/{_LOCK_FILE_NAME}"
 mkdir -p "$remote_dir"
 
 (
-  flock -x 200 || {{ echo "ERROR: deploy lock is held, aborting" >&2; exit 1; }}
+  {_ACQUIRE_LOCK}
 
   old_images=()
   if [ -f "$remote_dir/$compose_file" ]; then
@@ -146,7 +159,7 @@ mkdir -p "$remote_dir"
       docker compose -f "$compose_file" images -q 2>/dev/null | sort -u || true)
   fi
 
-  git --work-tree="$remote_dir" --git-dir="$remote_repo" checkout -f "$REVISION"
+  git -c advice.detachedHead=false --work-tree="$remote_dir" --git-dir="$remote_repo" checkout -f "$REVISION"
   echo "Code deployed to $remote_dir (revision ${{REVISION:0:7}})"
 
   cd "$remote_dir"
@@ -173,7 +186,7 @@ lock_file="$remote_dir/{_LOCK_FILE_NAME}"
 mkdir -p "$remote_dir"
 
 (
-  flock -x 200 || {{ echo "ERROR: deploy lock is held, aborting" >&2; exit 1; }}
+  {_ACQUIRE_LOCK}
   cd "$remote_dir"
   docker compose -f "$compose_file" down{flag}
   echo "Stopped"
@@ -206,7 +219,7 @@ lock_file="$remote_dir/{_LOCK_FILE_NAME}"
 mkdir -p "$remote_dir"
 
 (
-  flock -x 200 || {{ echo "ERROR: deploy lock is held, aborting" >&2; exit 1; }}
+  {_ACQUIRE_LOCK}
   cd "$remote_dir"
 {commands_block}
   echo "Reloaded"

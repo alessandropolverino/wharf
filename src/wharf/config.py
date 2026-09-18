@@ -41,7 +41,10 @@ checkout) at deploy time -- see :func:`render_repo_template`.
 
 from __future__ import annotations
 
+import ipaddress
 import re
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -52,6 +55,9 @@ SUPPORTED_SECRETS_PROVIDERS = frozenset({"infisical"})
 DEFAULT_BRANCH = "main"
 DEFAULT_COMPOSE_FILE = "docker-compose.yml"
 _COMPOSE_SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SSH_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._@-]*$")
+_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
+_IPV6_CHARS_RE = re.compile(r"^[0-9A-Fa-f:.]+$")
 
 
 class ConfigError(ValueError):
@@ -118,6 +124,12 @@ class Target:
     compose_file: str | None = None
     paths: tuple[str, ...] | None = None
     pre_up: tuple[PreUpStep, ...] | None = None
+
+    @property
+    def address(self) -> str:
+        """``host:port``, with an IPv6 host bracketed (``[2001:db8::1]:22``)."""
+        host = f"[{self.host}]" if ":" in self.host else self.host
+        return f"{host}:{self.port}"
 
     @property
     def uses_secrets(self) -> bool:
@@ -189,6 +201,55 @@ def _integer(value: object, label: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ConfigError(f"{label} must be an integer")
     return value
+
+
+def _absolute_path(value: object, label: str) -> str:
+    """A remote path. Must be absolute: a relative ``remote_repo`` can't
+    form a valid ``ssh://`` push URL, and a leading ``~`` is never
+    expanded (the path is shell-quoted everywhere it's used), so it would
+    silently create a directory literally named ``~``."""
+    text = _nonempty_string(value, label)
+    if not text.startswith("/"):
+        hint = " -- '~' is not expanded" if text.startswith("~") else ""
+        raise ConfigError(f"{label} must be an absolute path (starting with '/'){hint}")
+    return text
+
+
+def _ssh_user(value: object, label: str) -> str:
+    """Rejects a leading ``-`` in particular: ``user`` is the first half of
+    the ``user@host`` argument handed to `ssh`, which would otherwise parse
+    e.g. ``-oProxyCommand=...`` as an option and run it locally."""
+    text = _nonempty_string(value, label)
+    if not _SSH_USER_RE.fullmatch(text):
+        raise ConfigError(
+            f"{label} must be a valid SSH user name "
+            "(letters, digits, '.', '_', '@', '-', not starting with '-' or '.')"
+        )
+    return text
+
+
+def _is_ipv6_address(text: str) -> bool:
+    # The character check rules out a "%zone" suffix, which IPv6Address
+    # accepts but which would need escaping inside the push URL.
+    if not _IPV6_CHARS_RE.fullmatch(text):
+        return False
+    try:
+        ipaddress.IPv6Address(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _host(value: object, label: str) -> str:
+    """A hostname, IPv4 address, or *unbracketed* IPv6 address -- brackets
+    are added where they're needed (see :attr:`Target.address`)."""
+    text = _nonempty_string(value, label)
+    valid = _is_ipv6_address(text) if ":" in text else bool(_HOSTNAME_RE.fullmatch(text))
+    if not valid:
+        raise ConfigError(
+            f"{label} must be a hostname, an IPv4 address, or an unbracketed IPv6 address"
+        )
+    return text
 
 
 def _host_key(value: object, label: str) -> str:
@@ -293,10 +354,10 @@ def _load_target(value: object, index: int, *, secrets_configured: bool) -> Targ
 
     return Target(
         name=_nonempty_string(value["name"], f"{label}.name"),
-        remote_dir=_nonempty_string(value["remote_dir"], f"{label}.remote_dir"),
-        host=_nonempty_string(value["host"], f"{label}.host"),
+        remote_dir=_absolute_path(value["remote_dir"], f"{label}.remote_dir"),
+        host=_host(value["host"], f"{label}.host"),
         port=_port(value["port"], f"{label}.port"),
-        user=_nonempty_string(value["user"], f"{label}.user"),
+        user=_ssh_user(value["user"], f"{label}.user"),
         host_key=_host_key(value["host_key"], f"{label}.host_key"),
         order=_integer(value["order"], f"{label}.order"),
         healthcheck=_url(value["healthcheck"], f"{label}.healthcheck") if "healthcheck" in value else None,
@@ -311,6 +372,12 @@ def _port(value: object, label: str) -> int:
     if not 1 <= port <= 65535:
         raise ConfigError(f"{label} must be between 1 and 65535")
     return port
+
+
+def _duplicates(values: Iterable[str] | Iterable[int]) -> list[str]:
+    """Values appearing more than once, sorted (numerically for orders), as strings."""
+    repeated = sorted(value for value, count in Counter(values).items() if count > 1)
+    return [str(value) for value in repeated]
 
 
 def load_config(path: Path) -> Config:
@@ -345,15 +412,15 @@ def load_config(path: Path) -> Config:
         for index, item in enumerate(raw_targets)
     ]
 
-    names = [t.name for t in targets]
-    if len(names) != len(set(names)):
-        raise ConfigError("target names must be unique")
-    orders = [t.order for t in targets]
-    if len(orders) != len(set(orders)):
-        raise ConfigError("target order values must be unique")
+    duplicate_names = _duplicates(t.name for t in targets)
+    if duplicate_names:
+        raise ConfigError(f"target names must be unique (duplicated: {', '.join(duplicate_names)})")
+    duplicate_orders = _duplicates(t.order for t in targets)
+    if duplicate_orders:
+        raise ConfigError(f"target order values must be unique (duplicated: {', '.join(duplicate_orders)})")
 
     return Config(
-        remote_repo=_nonempty_string(document["remote_repo"], "remote_repo"),
+        remote_repo=_absolute_path(document["remote_repo"], "remote_repo"),
         branch=_nonempty_string(document["branch"], "branch") if "branch" in document else DEFAULT_BRANCH,
         compose_file=(
             _nonempty_string(document["compose_file"], "compose_file")

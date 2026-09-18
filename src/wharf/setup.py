@@ -49,22 +49,26 @@ def ensure_deploy_keypair(identity: str, key_dir: Path = DEFAULT_KEY_DIR) -> tup
     return private_key, public_key
 
 
-def _provision_target(config: Config, target: Target, repo: str, public_key: str) -> None:
-    remote_repo = render_repo_template(config.remote_repo, repo)
-    remote_dir = render_repo_template(target.remote_dir, repo)
-    auth = SessionAuth(batch=False)  # operator's own identity, prompts allowed
-    argv = build_ssh_argv(target, auth) + ["bash", "-s"]
+def _render_setup_script(remote_repo: str, remote_dir: str, public_key: str, target_name: str) -> str:
+    """The remote script for one target: create the bare repo and remote
+    dir if missing, then authorize `public_key` unless it already is.
 
+    Before appending, a missing trailing newline on the last line of
+    `authorized_keys` is repaired. `echo >>` would otherwise glue the new
+    key onto that line: the deploy key would not be authorized despite
+    the success message, and an existing key line with no comment would
+    have its base64 blob corrupted -- locking out whoever it belongs to.
+    """
     remote_repo_q = shlex.quote(remote_repo)
     remote_dir_q = shlex.quote(remote_dir)
     public_key_q = shlex.quote(public_key)
-    target_name_q = shlex.quote(target.name)
+    target_name_q = shlex.quote(target_name)
     # Interpolating remote_repo/target.name straight into a double-quoted
     # echo string would still let $(...) / backticks inside them execute on
     # the target (double quotes don't stop command substitution) -- so the
     # already-shell-quoted variables are passed as separate, unquoted-by-us
     # echo arguments instead, the same way the *_q values are used elsewhere.
-    script = f"""\
+    return f"""\
 set -euo pipefail
 if [ ! -d {remote_repo_q} ]; then
   git init --bare {remote_repo_q}
@@ -78,14 +82,24 @@ touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
 if grep -qxF {public_key_q} ~/.ssh/authorized_keys; then
   echo "Deploy key already authorized on" {target_name_q}
 else
+  if [ -s ~/.ssh/authorized_keys ] && [ -n "$(tail -c 1 ~/.ssh/authorized_keys)" ]; then
+    echo >> ~/.ssh/authorized_keys
+  fi
   echo {public_key_q} >> ~/.ssh/authorized_keys
   echo "Authorized deploy key on" {target_name_q}
 fi
 """
+
+
+def _provision_target(config: Config, target: Target, repo: str, public_key: str) -> None:
+    remote_repo = render_repo_template(config.remote_repo, repo)
+    remote_dir = render_repo_template(target.remote_dir, repo)
+    auth = SessionAuth(batch=False)  # operator's own identity, prompts allowed
+    argv = build_ssh_argv(target, auth) + ["bash", "-s"]
     run_streaming(
         argv,
         description=f"setup on {target.name}",
-        input_text=script,
+        input_text=_render_setup_script(remote_repo, remote_dir, public_key, target.name),
     )
 
 
@@ -99,13 +113,16 @@ def setup(
 ) -> None:
     """Bootstrap every selected target: bare repo, remote dir, deploy key."""
     _check_branch(config)
+    # Selected before generating anything, so an --only typo can't leave
+    # a fresh key behind.
+    targets = config.select_targets(only)
     ci = is_ci() if force_ci is None else force_ci
     resolved_identity = resolve_identity(identity, is_ci=ci)
     private_key, public_key_path = ensure_deploy_keypair(resolved_identity)
     public_key = public_key_path.read_text().strip()
 
-    for target in config.select_targets(only):
-        print(f"==> Setting up {target.name} ({target.host}:{target.port})")
+    for target in targets:
+        print(f"==> Setting up {target.name} ({target.address})")
         _provision_target(config, target, repo, public_key)
 
     print()

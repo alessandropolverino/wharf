@@ -13,10 +13,12 @@ filename, not the config.
 ```yaml
 version: 1                              # required, must be 1
 
-remote_repo: /srv/git/{repo}.git        # required. Path to the bare git
-                                         # repo on each target. {repo} is
-                                         # substituted with the project
-                                         # name (see "The {repo} placeholder").
+remote_repo: /srv/git/{repo}.git        # required. Absolute path to the
+                                         # bare git repo on each target
+                                         # (no relative paths, no ~).
+                                         # {repo} is substituted with the
+                                         # project name (see "The {repo}
+                                         # placeholder").
 
 branch: main                            # optional, default "main".
                                          # The branch ref wharf pushes to
@@ -48,12 +50,17 @@ secrets:                                # optional. Omit entirely if no
 
 targets:                                # required, non-empty list.
   - name: etl                           # required, unique within the file.
-    remote_dir: /opt/deploys/{repo}/app # required. Where the working
-                                         # tree is checked out and compose
-                                         # runs from on this target.
-    host: 203.0.113.10                  # required.
+    remote_dir: /opt/deploys/{repo}/app # required. Absolute path where
+                                         # the working tree is checked
+                                         # out and compose runs from on
+                                         # this target.
+    host: 203.0.113.10                  # required. Hostname, IPv4, or
+                                         # IPv6 address (unbracketed,
+                                         # e.g. 2001:db8::10).
     port: 22                            # required, 1-65535.
-    user: ubuntu                        # required. SSH user.
+    user: ubuntu                        # required. SSH user (letters,
+                                         # digits, . _ @ -; can't start
+                                         # with - or .).
     host_key: ssh-ed25519 AAAA...       # required. Pinned host key —
                                          # wharf never trusts an
                                          # unrecognized host key.
@@ -141,6 +148,9 @@ targets:
 
 ```
 wharf deploy deploy.yml
+
+# or first, to see exactly what that would push and run, without connecting:
+wharf deploy deploy.yml --dry-run
 ```
 
 ### 2. Multiple targets, sequential rollout
@@ -367,9 +377,12 @@ until you run it again.
 
 `wharf rotate --only TARGET` promotes the new key to the local live key
 file as soon as the selected target(s) confirm the swap, even though
-targets you didn't select still only trust the old key -- run `rotate`
-again (with `--only` for the rest, or with no `--only` at all) before
-deploying to those targets, or they'll reject the now-local key.
+targets you didn't select still only trust the old key (wharf prints a
+warning naming them). Run `wharf rotate` again **without** `--only`
+before deploying to those targets, or they'll reject the now-local key.
+Don't finish with `--only` for the rest: nothing is staged any more, so
+that run generates *another* new key, and the targets you rotated first
+would then reject it instead.
 
 `wharf identities` reads only local key files under `.wharf/` -- it does
 not check what's actually authorized on any target.

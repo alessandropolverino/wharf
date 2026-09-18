@@ -76,9 +76,10 @@ you'd cloned the repo there by hand.
 | One host, one invocation. | An ordered list of **targets** — `wharf deploy` walks them sequentially, stopping at the first failure so a broken deploy can't cascade past it. |
 | No built-in "run this one-off command first." | **`pre_up`**: named compose services run via `docker compose run --rm --build` *before* `up`, for migrations/bootstrap — with `--build` forced (so a migration can't run against a stale cached image) and stdin isolation (`-T </dev/null`) so it can't swallow the rest of the deploy script (see [`remote_script.md`](../src/wharf/remote_script.md)). |
 | No secrets injection — you wire that up yourself (`.env` files, a secrets manager CLI, whatever). | Optional, per-target **Infisical injection**: `paths` on a target (or per-`pre_up`-step) wraps the relevant compose/run command with `infisical run`, so secrets never sit in a file on the target or in the config. |
-| No protection against two deploys racing on the same host. | A **`flock`**-based lock file per `remote_dir` — a concurrent deploy/down/reload on the same target aborts instead of racing. |
+| No protection against two deploys racing on the same host. | A **`flock`**-based lock file per `remote_dir` — a concurrent deploy/down/reload on the same target aborts immediately instead of racing (or queueing and then rolling back a newer deploy). |
 | Old images pile up after every rebuild. | **Automatic pruning**: after a successful `up --build`, any image that was running *before* the deploy and isn't referenced by a running container anymore gets `docker rmi`'d. |
 | No readiness signal. | Optional **healthcheck polling** after `deploy`/`reload`, from outside the target. |
+| Nothing to review before it runs on the host. | **`--dry-run`** on `deploy`/`down`/`reload` prints the exact `git push` and bash script each target would get, without connecting — see [`operations.md`](../src/wharf/operations.md#dry-run). |
 | — | **CI-aware auth**: the same config and the same `wharf deploy` command work unchanged from a laptop (agent/interactive auth) or a CI runner (`DEPLOY_SSH_KEY`, batch mode) — see [`configuration.md`](configuration.md#local-vs-ci-auth). |
 
 ## What wharf deliberately does *not* do
