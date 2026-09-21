@@ -24,6 +24,7 @@ from pathlib import Path
 from .config import Config, Target, render_repo_template
 from .healthcheck import wait_healthy
 from .remote_script import (
+    history_path,
     render_down,
     render_history,
     render_logs,
@@ -155,6 +156,7 @@ def deploy(
                 remote_repo=remote_repo,
                 remote_dir=remote_dir,
                 compose_file=config.compose_file_for(target),
+                history_file=history_path(remote_repo, target.name),
                 secrets=config.secrets,
                 paths=target.paths,
                 pre_up=target.pre_up,
@@ -313,9 +315,11 @@ def rollback_target(records: list[DeployRecord], steps: int = 1) -> tuple[Deploy
 
 
 def _read_history(
-    target: Target, auth: SessionAuth, remote_repo: str, remote_dir: str, limit: int | None,
+    target: Target, auth: SessionAuth, remote_repo: str, limit: int | None,
 ) -> list[DeployRecord]:
-    script = render_history(remote_repo=remote_repo, remote_dir=remote_dir, limit=limit)
+    script = render_history(
+        remote_repo=remote_repo, history_file=history_path(remote_repo, target.name), limit=limit,
+    )
     output = capture_remote_script(target, auth, script, {}, description=f"read deploy history on {target.name}")
     return parse_history(output)
 
@@ -338,6 +342,7 @@ def status(
                 remote_repo=remote_repo,
                 remote_dir=remote_dir,
                 compose_file=config.compose_file_for(target),
+                history_file=history_path(remote_repo, target.name),
                 secrets=config.secrets,
                 paths=target.paths,
             )
@@ -401,10 +406,10 @@ def history(
     _check_branch(config)
     for target in config.select_targets(only):
         print(_header("History of", target, False))
-        remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
+        remote_repo, _ = _remote_repo_and_dir(config, target, repo)
         try:
             auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
-            records = _read_history(target, auth, remote_repo, remote_dir, limit)
+            records = _read_history(target, auth, remote_repo, limit)
         except Exception as exc:  # noqa: BLE001
             raise OperationError(target.name, exc) from exc
         if not records:
@@ -443,7 +448,7 @@ def rollback(
         remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
         try:
             auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
-            records = _read_history(target, auth, remote_repo, remote_dir, None)
+            records = _read_history(target, auth, remote_repo, None)
             current, previous = rollback_target(records, steps)
             print(f"{current.describe()} -> {previous.describe()} (deployed {previous.timestamp})")
             script = render_up(
@@ -451,6 +456,7 @@ def rollback(
                 remote_dir=remote_dir,
                 compose_file=config.compose_file_for(target),
                 secrets=config.secrets,
+                history_file=history_path(remote_repo, target.name),
                 paths=target.paths,
                 pre_up=target.pre_up,
                 kind="rollback",

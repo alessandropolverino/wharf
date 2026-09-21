@@ -126,7 +126,11 @@ or installs anything on its own.
   key, the filename (`deploy.yml`, `deploy.staging.yml`, ...) is what
   tells you which environment a file represents.
 - **Each target keeps its own deploy history.** Every successful deploy
-  appends one line to `<remote_dir>/.wharf-history` on the target;
-  `wharf history` reads it, and `wharf rollback` re-deploys the entry
-  before the current one through exactly the same path as a deploy --
-  no push needed, the target's bare repo already has that revision.
+  appends one line to a state file beside the target's *bare repo* --
+  never inside `remote_dir`, which compose files routinely bind-mount
+  into containers. `wharf history` reads it, and `wharf rollback`
+  re-deploys the entry before the current one through exactly the same
+  path as a deploy -- no push needed, the target's bare repo already
+  has that revision. See
+  [docs/configuration.md](docs/configuration.md#deploy-history-status-and-rollback)
+  for the trust boundary that record depends on.

@@ -111,7 +111,12 @@ target failure.
 `parse_history` only accepts lines shaped like history entries
 (`<timestamp> <40–64 hex> <deploy|rollback>[<tab><subject>]`): the script
 runs in a login shell, so anything a profile script prints is skipped
-rather than mistaken for a deploy.
+rather than mistaken for a deploy. That is a parsing guard, not a trust
+boundary — the integrity of the record itself comes from where it lives
+and who can write it, which
+[`remote_script.md`](remote_script.md#history_pathremote_repo-target_name--and-why-it-isnt-in-remote_dir)
+covers. If the target's history fails that check, `history` and
+`rollback` fail with the reason rather than acting on it.
 
 ## Guards
 

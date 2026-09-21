@@ -282,12 +282,12 @@ wharf deploy deploy.staging.yml    # staging
 
 ## Deploy history, status, and rollback
 
-Every successful `deploy` (and `rollback`) appends one line to
-`<remote_dir>/.wharf-history` on the target -- `<UTC timestamp> <full sha>
-<deploy|rollback>` -- right after `docker compose up` succeeds. A deploy
-that fails in `pre_up` or `up` records nothing. Besides the checkout and
-the lock file, it's the only state wharf keeps on a target, and it's
-what these commands read:
+Every successful `deploy` (and `rollback`) appends one line -- `<UTC
+timestamp> <full sha> <deploy|rollback>` -- to that target's history
+file, right after `docker compose up` succeeds. A deploy that fails in
+`pre_up` or `up` records nothing. Besides the checkout and the lock
+file, it's the only state wharf keeps on a target, and it's what these
+commands read:
 
 - `wharf status deploy.yml` -- per target: the checked-out revision, the
   last history entry, whether the deploy lock is held right now (i.e. a
@@ -309,6 +309,45 @@ Targets deployed before this history existed have no entries yet; `wharf
 rollback` says so and points at `wharf deploy --revision <sha>`, which
 deploys any revision the target's bare repo can reach -- and is also how
 to go back further than the history does.
+
+### Where the history lives, and why it matters
+
+The history file decides which revision `wharf rollback` deploys, so it
+is kept **beside the bare repo**, at
+`<remote_repo without .git>.wharf/<target>.history` -- for
+`remote_repo: /srv/git/{repo}.git` and a target named `api`, that's
+`/srv/git/myapp.wharf/api.history`. wharf creates the directory `0700`
+and the file `0600`, owned by the SSH user it logs in as.
+
+It is deliberately **not** inside `remote_dir`. That directory is the
+compose project directory, and compose files routinely bind-mount it
+into containers (`volumes: [".:/app"]`); `git checkout -f` doesn't
+remove untracked files, so anything written there survives later
+deploys. A workload that could write the history would choose what your
+next rollback deploys -- any revision still in the bare repo, including
+one whose bug you have since patched.
+
+Keeping it with the bare repo adds no new trust: that repo is already
+where the deployed code comes from, so anything able to write it can
+already decide what runs.
+
+**The invariant, and what wharf checks.** wharf trusts the history only
+when nothing but the deploy user could have written it. Before reading
+it, `wharf history` and `wharf rollback` verify that the file *and* its
+directory are owned by the user wharf logged in as and are not
+group- or other-writable; otherwise they refuse and say why, rather
+than acting on a record that might be forged. `wharf status` reports
+`last deploy: not trusted -- ...` and still shows everything else.
+
+Keep that true on your side: the deploy user owns `/srv/git` (or
+wherever `remote_repo` lives), the state directory is not group- or
+world-writable, and no container mounts it. wharf never generates your
+compose file, so it cannot enforce the last part -- a compose service
+that bind-mounts the bare repo's parent, runs `privileged: true`, or
+mounts the Docker socket is outside what these checks can catch (such a
+container can already deploy whatever it likes). If you can't guarantee
+that, use `wharf deploy --revision <sha>` and treat `wharf history` as
+information only.
 
 `wharf logs deploy.yml [SERVICE...] [--only NAME] [-f] [--tail N] [--since WHEN]`
 streams `docker compose logs` from each selected target (the last 100

@@ -315,3 +315,17 @@ def test_ipv6_zone_id_rejected(write_config):
     text = VALID_MINIMAL.replace("host: 203.0.113.10", "host: 'fe80::1%eth0'")
     with pytest.raises(ConfigError, match=r"targets\[0\].host must be a hostname"):
         load_config(write_config(text))
+
+
+@pytest.mark.parametrize("name", ["../../etc/passwd", "a/b", "-app", ".hidden", "app name", "app\ty"])
+def test_target_names_that_are_unsafe_as_path_components_rejected(write_config, name):
+    # The name becomes a path component of the target's deploy-history file.
+    text = VALID_MINIMAL.replace("name: app", f"name: {json.dumps(name)}")
+    with pytest.raises(ConfigError, match=r"targets\[0\].name must be a target name"):
+        load_config(write_config(text))
+
+
+@pytest.mark.parametrize("name", ["app", "api-prod", "web_2", "core.eu"])
+def test_ordinary_target_names_still_accepted(write_config, name):
+    config = load_config(write_config(VALID_MINIMAL.replace("name: app", f"name: {name}")))
+    assert config.targets[0].name == name

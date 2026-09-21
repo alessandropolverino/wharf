@@ -55,6 +55,7 @@ SUPPORTED_SECRETS_PROVIDERS = frozenset({"infisical"})
 DEFAULT_BRANCH = "main"
 DEFAULT_COMPOSE_FILE = "docker-compose.yml"
 _COMPOSE_SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SSH_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._@-]*$")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 _IPV6_CHARS_RE = re.compile(r"^[0-9A-Fa-f:.]+$")
@@ -215,6 +216,19 @@ def _absolute_path(value: object, label: str) -> str:
     return text
 
 
+def _target_name(value: object, label: str) -> str:
+    """A target's name. Restricted because it becomes a path component of
+    that target's deploy-history file (see ``remote_script.history_path``)
+    -- ``/`` or ``..`` would otherwise escape the state directory."""
+    text = _nonempty_string(value, label)
+    if not _TARGET_NAME_RE.fullmatch(text):
+        raise ConfigError(
+            f"{label} must be a target name of letters, digits, '.', '_' or '-', "
+            "not starting with '-' or '.'"
+        )
+    return text
+
+
 def _ssh_user(value: object, label: str) -> str:
     """Rejects a leading ``-`` in particular: ``user`` is the first half of
     the ``user@host`` argument handed to `ssh`, which would otherwise parse
@@ -354,7 +368,7 @@ def _load_target(value: object, index: int, *, secrets_configured: bool) -> Targ
                 )
 
     return Target(
-        name=_nonempty_string(value["name"], f"{label}.name"),
+        name=_target_name(value["name"], f"{label}.name"),
         remote_dir=_absolute_path(value["remote_dir"], f"{label}.remote_dir"),
         host=_host(value["host"], f"{label}.host"),
         port=_port(value["port"], f"{label}.port"),

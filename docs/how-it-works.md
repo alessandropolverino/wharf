@@ -57,6 +57,11 @@ target's history, then runs the *deploy* script for the previous
 revision -- with no push, since the bare repo on the target already has
 it -- and records itself in that history too.
 
+Because the history is what `rollback` acts on, it is kept beside the
+bare repo rather than in `remote_dir`, and is read back only when its
+ownership and mode say the deploy user alone could have written it --
+see [`configuration.md`](configuration.md#deploy-history-status-and-rollback).
+
 ## No registry — git *is* the delivery mechanism
 
 The classic compose deploy needs a registry: build an image, push it,
@@ -88,7 +93,7 @@ you'd cloned the repo there by hand.
 | No readiness signal. | Optional **healthcheck polling** after `deploy`/`reload`, from outside the target. |
 | Nothing to review before it runs on the host. | **`--dry-run`** on `deploy`/`down`/`reload` prints the exact `git push` and bash script each target would get, without connecting — see [`operations.md`](../src/wharf/operations.md#dry-run). |
 | Seeing what's running means ssh-ing in by hand. | **`wharf status`** (checked-out revision, last deploy, whether the deploy lock is held, `docker compose ps`) and **`wharf logs`** (`docker compose logs`, optionally followed) per target. |
-| No memory of what was deployed before. | A **deploy history** per target (`<remote_dir>/.wharf-history`, one line per successful `up`), listed by **`wharf history`** and used by **`wharf rollback`**, which re-deploys the previous distinct revision through the normal deploy path — `pre_up`, lock, pruning, healthcheck and all. |
+| No memory of what was deployed before. | A **deploy history** per target (one line per successful `up`, kept beside the bare repo — never in the bind-mountable deploy directory), listed by **`wharf history`** and used by **`wharf rollback`**, which re-deploys the previous distinct revision through the normal deploy path — `pre_up`, lock, pruning, healthcheck and all. |
 | — | **CI-aware auth**: the same config and the same `wharf deploy` command work unchanged from a laptop (agent/interactive auth) or a CI runner (`DEPLOY_SSH_KEY`, batch mode) — see [`configuration.md`](configuration.md#local-vs-ci-auth). |
 
 ## What wharf deliberately does *not* do

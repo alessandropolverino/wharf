@@ -15,10 +15,15 @@ deploys of the same target and only the environment changes -- useful
 when eyeballing what actually ran in a log.
 
 Every successful ``up`` (a deploy or a rollback) appends one line --
-``<UTC timestamp> <full sha> <kind>`` -- to ``<remote_dir>/.wharf-history``,
-which is what `wharf history`, `wharf status` and `wharf rollback` read
-back. Besides the checkout itself and the lock file, it's the only state
-wharf keeps on a target.
+``<UTC timestamp> <full sha> <kind>`` -- to the target's history file
+(see :func:`history_path`), which is what `wharf history`, `wharf status`
+and `wharf rollback` read back. Besides the checkout itself and the lock
+file, it's the only state wharf keeps on a target.
+
+That file decides which revision a later `wharf rollback` deploys, so it
+lives beside the *bare repo*, never inside ``remote_dir``, and is read
+back only when its ownership and mode say the deploy user alone could
+have written it -- see :func:`history_path` and :data:`_TRUST_CHECK`.
 """
 
 from __future__ import annotations
@@ -28,7 +33,42 @@ import shlex
 from .config import PreUpStep, SecretsDefaults
 
 _LOCK_FILE_NAME = ".wharf-deploy.lock"
-_HISTORY_FILE_NAME = ".wharf-history"
+_STATE_DIR_SUFFIX = ".wharf"
+
+# The deploy history is an input to `wharf rollback`, so it is only
+# believed when nothing but its owner could have written it, and that
+# owner is the user wharf logs in as. `stat -c` is GNU/busybox syntax
+# (like the `flock` and `mapfile` these scripts already rely on), with
+# the BSD spelling as a fallback; if neither answers, the file is not
+# trusted rather than trusted blindly.
+_TRUST_CHECK = """wharf_untrusted() {
+  local path=$1 mode owner
+  mode=$(stat -c %a "$path" 2>/dev/null || stat -f %Lp "$path" 2>/dev/null) \
+    || { echo "$path: cannot check its permissions"; return; }
+  owner=$(stat -c %u "$path" 2>/dev/null || stat -f %u "$path" 2>/dev/null) \
+    || { echo "$path: cannot check its owner"; return; }
+  [ "$owner" = "$(id -u)" ] || { echo "$path is owned by uid $owner, not by the deploy user (uid $(id -u))"; return; }
+  (( (8#$mode & 0022) == 0 )) || { echo "$path is mode $mode -- writable by group or other"; return; }
+}"""
+
+
+def history_path(remote_repo: str, target_name: str) -> str:
+    """Where a target's deploy history lives on the host.
+
+    Beside the bare repo, deliberately **not** inside ``remote_dir``:
+    that is the compose project directory, which compose files routinely
+    bind-mount into containers (``volumes: [".:/app"]``), and
+    ``git checkout -f`` does not remove untracked files, so a forged
+    record would survive later deploys. A workload that could write it
+    would choose what the next `wharf rollback` deploys -- any revision
+    in the bare repo, including one whose bug was since patched.
+
+    The bare repo is already the trusted source of the code itself, so
+    keeping the record beside it adds no trust that isn't there already.
+    """
+    base = remote_repo[:-4] if remote_repo.endswith(".git") else remote_repo
+    return f"{base}{_STATE_DIR_SUFFIX}/{target_name}.history"
+
 
 # -n: fail fast instead of queueing behind a running deploy/down/reload.
 # A blocking flock waits indefinitely behind a hung run, and a deploy
@@ -110,6 +150,7 @@ def render_up(
     remote_repo: str,
     remote_dir: str,
     compose_file: str,
+    history_file: str,
     secrets: SecretsDefaults | None,
     paths: tuple[str, ...] | None,
     pre_up: tuple[PreUpStep, ...] | None = None,
@@ -139,11 +180,14 @@ def render_up(
     multi-paragraph "detached HEAD" advice is switched off rather than
     repeated in every deploy log.
 
-    Once the services are up, the deploy is appended to the target's
-    history file as ``kind`` (``deploy``, or ``rollback`` when
-    :func:`wharf.operations.rollback` re-deploys an earlier revision),
-    with the *resolved* sha -- ``$REVISION`` may be a tag or branch name.
-    A failed ``pre_up`` or ``up`` records nothing.
+    Once the services are up, the deploy is appended to ``history_file``
+    (see :func:`history_path`) as ``kind`` (``deploy``, or ``rollback``
+    when :func:`wharf.operations.rollback` re-deploys an earlier
+    revision), with the *resolved* sha -- ``$REVISION`` may be a tag or
+    branch name. A failed ``pre_up`` or ``up`` records nothing. The
+    record is created under ``umask 077`` and left mode 600, so only the
+    deploy user can write it; failing to record it warns rather than
+    failing a deploy whose services are already up.
     """
     pre_up_commands = [
         (
@@ -163,7 +207,8 @@ remote_repo={shlex.quote(remote_repo)}
 remote_dir={shlex.quote(remote_dir)}
 compose_file={shlex.quote(compose_file)}
 lock_file="$remote_dir/{_LOCK_FILE_NAME}"
-history_file="$remote_dir/{_HISTORY_FILE_NAME}"
+history_file={shlex.quote(history_file)}
+history_dir=$(dirname "$history_file")
 mkdir -p "$remote_dir"
 
 (
@@ -182,7 +227,12 @@ mkdir -p "$remote_dir"
   cd "$remote_dir"
 {commands_block}
   echo "Services started"
-  printf '%s %s %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$deployed_revision" {shlex.quote(kind)} >> "$history_file"
+  if (umask 077; mkdir -p "$history_dir") \\
+    && printf '%s %s %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$deployed_revision" {shlex.quote(kind)} >> "$history_file"; then
+    chmod 600 "$history_file" 2>/dev/null || true
+  else
+    echo "WARNING: could not record this deploy in $history_file (rollback will not see it)" >&2
+  fi
 
   for img_id in "${{old_images[@]+"${{old_images[@]}}"}}"; do
     docker inspect "$img_id" >/dev/null 2>&1 || continue
@@ -250,6 +300,7 @@ def render_status(
     remote_repo: str,
     remote_dir: str,
     compose_file: str,
+    history_file: str,
     secrets: SecretsDefaults | None,
     paths: tuple[str, ...] | None,
 ) -> str:
@@ -263,6 +314,10 @@ def render_status(
     lock file -- or anything else. A target that was never deployed is
     reported as such, not treated as an error.
 
+    The last deploy is reported from ``history_file`` only when that file
+    passes the same trust check `wharf history` uses; otherwise the line
+    says so instead of quoting a record anything could have written.
+
     `docker compose ps` gets the same secrets wrapping as `up` when the
     target declares ``paths``: compose still interpolates the file for
     `ps`, so a ``${VAR:?}`` reference would otherwise fail.
@@ -274,7 +329,8 @@ remote_repo={shlex.quote(remote_repo)}
 remote_dir={shlex.quote(remote_dir)}
 compose_file={shlex.quote(compose_file)}
 lock_file="$remote_dir/{_LOCK_FILE_NAME}"
-history_file="$remote_dir/{_HISTORY_FILE_NAME}"
+history_file={shlex.quote(history_file)}
+{_TRUST_CHECK}
 
 if [ ! -d "$remote_dir" ]; then
   echo "not deployed: $remote_dir does not exist"
@@ -286,9 +342,14 @@ else
   echo "revision: nothing checked out"
 fi
 if [ -s "$history_file" ]; then
-  timestamp= deployed= kind=
-  read -r timestamp deployed kind _ < <(tail -n 1 "$history_file") || true
-  echo "last deploy: $timestamp (${{kind:-deploy}} of ${{deployed:0:7}})"
+  untrusted=$(wharf_untrusted "$history_file")
+  if [ -n "$untrusted" ]; then
+    echo "last deploy: not trusted -- $untrusted"
+  else
+    timestamp= deployed= kind=
+    read -r timestamp deployed kind _ < <(tail -n 1 "$history_file") || true
+    echo "last deploy: $timestamp (${{kind:-deploy}} of ${{deployed:0:7}})"
+  fi
 else
   echo "last deploy: no history recorded"
 fi
@@ -346,7 +407,7 @@ cd "$remote_dir"
 """
 
 
-def render_history(*, remote_repo: str, remote_dir: str, limit: int | None = None) -> str:
+def render_history(*, remote_repo: str, history_file: str, limit: int | None = None) -> str:
     """History action: print the target's deploy history, oldest first. Read-only.
 
     Each history line (``<timestamp> <revision> <kind>``, as appended by
@@ -354,15 +415,35 @@ def render_history(*, remote_repo: str, remote_dir: str, limit: int | None = Non
     looked up in the bare repo, tab-separated, for
     :func:`wharf.operations.parse_history` to read. ``limit`` keeps only
     the most recent entries. A target with no history file prints nothing.
+
+    Two guards, because this output chooses what `wharf rollback`
+    deploys. The file and its directory must pass :data:`_TRUST_CHECK`,
+    or the script refuses rather than reporting a record that something
+    else may have written. And each revision must be a plain hex object
+    name before it reaches `git`: a value like ``--output=<path>`` would
+    otherwise be read by `git log` as an *option* and write that file as
+    the deploy user (``--`` can't help -- after it, git takes the
+    argument as a pathspec rather than a revision).
     """
     source = f"tail -n {int(limit)}" if limit is not None else "cat"
     return f"""\
 set -euo pipefail
 remote_repo={shlex.quote(remote_repo)}
-remote_dir={shlex.quote(remote_dir)}
-history_file="$remote_dir/{_HISTORY_FILE_NAME}"
+history_file={shlex.quote(history_file)}
+history_dir=$(dirname "$history_file")
+{_TRUST_CHECK}
 [ -f "$history_file" ] || exit 0
+for path in "$history_dir" "$history_file"; do
+  untrusted=$(wharf_untrusted "$path")
+  if [ -n "$untrusted" ]; then
+    echo "refusing to read the deploy history: $untrusted" >&2
+    echo "wharf believes this file only if the deploy user alone can write it" >&2
+    exit 1
+  fi
+done
 {source} "$history_file" | while read -r timestamp revision kind _; do
+  case "$revision" in ''|*[!0-9a-f]*) continue;; esac
+  [ ${{#revision}} -ge 40 ] || continue
   subject=$(git --git-dir="$remote_repo" log -1 --format=%s "$revision" 2>/dev/null || true)
   printf '%s %s %s\\t%s\\n' "$timestamp" "$revision" "${{kind:-deploy}}" "$subject"
 done

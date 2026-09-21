@@ -85,6 +85,10 @@ command-injection or credential-exfiltration vector — see also
   service name at render time, independently of this regex. The
   validator, `compose_service_name`, is public: the CLI applies it to
   `wharf logs SERVICE...` too.
+- **`name`** must match `^[A-Za-z0-9][A-Za-z0-9._-]*$` — it becomes a
+  path component of that target's deploy-history file (see
+  [`remote_script.md`](remote_script.md)), so `/` or `..` would escape
+  the state directory.
 - **`user`** must match `^[A-Za-z0-9_][A-Za-z0-9._@-]*$`. It's the first
   half of the `user@host` argument handed to `ssh`, so a leading `-`
   would be parsed as an option — `-oProxyCommand=...` runs a local
