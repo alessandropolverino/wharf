@@ -24,8 +24,14 @@ def push_url(target: Target, remote_repo: str) -> str:
 
 
 def push_refspec(revision: str, branch: str) -> str:
-    """Push ``revision`` as ``branch`` on the target's bare repo."""
-    return f"{revision}:refs/heads/{branch}"
+    """Push ``revision`` as ``branch`` on the target's bare repo.
+
+    Forced (``+``): that branch only ever mirrors "the revision last
+    pushed for deployment"; nobody fast-forwards along it. Without the
+    ``+``, ``deploy --revision <older sha>`` is rejected as a
+    non-fast-forward update -- precisely when it's needed.
+    """
+    return f"+{revision}:refs/heads/{branch}"
 
 
 def push_revision(

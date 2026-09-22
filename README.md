@@ -60,6 +60,13 @@ wharf down deploy.yml --volumes
 
 # restart without rebuilding (e.g. after rotating a secret):
 wharf reload deploy.yml
+
+# see what's checked out and running on each target, or tail one target's logs:
+wharf status deploy.yml
+wharf logs deploy.yml --only app -f
+
+# put back whatever was running before the last deploy:
+wharf rollback deploy.yml
 ```
 
 Run the exact same `wharf deploy deploy.yml` from a GitHub Actions
@@ -77,6 +84,10 @@ the full docs index (config reference + per-file code reference).
 | `wharf deploy <config.yml>` | Push the current revision, build, and start each target in order. |
 | `wharf down <config.yml> [--volumes]` | Stop each target; `--volumes` also removes its volumes. |
 | `wharf reload <config.yml>` | Re-run compose without rebuilding, picks up rotated secrets or just restarts. |
+| `wharf status <config.yml>` | Show each target's checked-out revision, last deploy, deploy lock, and `docker compose ps`. |
+| `wharf logs <config.yml> [SERVICE...]` | Show a target's `docker compose logs`; `-f` follows one target, `--tail N` / `--since WHEN` narrow it. |
+| `wharf history <config.yml>` | List the revisions deployed to each target, newest first, from the target's own deploy history. |
+| `wharf rollback <config.yml> [--steps N]` | Re-deploy the revision that was running before the current one (N distinct revisions back), through the normal deploy path. |
 | `wharf ls <config.yml>` | List a config's targets and their order, without connecting to anything. |
 | `wharf setup <config.yml>` | Bootstrap: generate a deploy keypair, create bare repos, authorize the key. |
 | `wharf rotate <config.yml>` | Replace an identity's deploy key everywhere, removing the old `authorized_keys` entry. |
@@ -87,10 +98,11 @@ All commands except `ls` and `identities` accept `--only NAME`
 (repeatable) to act on a subset of targets, `--repo NAME` to override
 the inferred project name, and `--identity NAME` to pick which named
 deploy-key identity to use (default: `ci` in CI, `default` otherwise).
-`deploy` also accepts `--revision SHA`, and `deploy`, `down`, and
-`reload` accept `--dry-run`, which prints the `git push` and the exact
-script each target would run without connecting to anything (so it
-needs no credentials either). See
+`deploy` also accepts `--revision SHA`, and `deploy`, `down`, `reload`
+and `rollback` accept `--dry-run`, which prints the `git push` and the
+exact script each target would run without deploying anything --
+`rollback`'s dry run still connects, read-only, to read each target's
+history; the others don't connect at all. See
 [docs/configuration.md](docs/configuration.md) for the full config
 reference, worked examples, identities and rotation, and how local vs.
 CI auth is handled.
@@ -113,3 +125,12 @@ or installs anything on its own.
 - **Config files are flat.** There's no `production:`/`staging:` wrapper
   key, the filename (`deploy.yml`, `deploy.staging.yml`, ...) is what
   tells you which environment a file represents.
+- **Each target keeps its own deploy history.** Every successful deploy
+  appends one line to a state file beside the target's *bare repo* --
+  never inside `remote_dir`, which compose files routinely bind-mount
+  into containers. `wharf history` reads it, and `wharf rollback`
+  re-deploys the entry before the current one through exactly the same
+  path as a deploy -- no push needed, the target's bare repo already
+  has that revision. See
+  [docs/configuration.md](docs/configuration.md#deploy-history-status-and-rollback)
+  for the trust boundary that record depends on.

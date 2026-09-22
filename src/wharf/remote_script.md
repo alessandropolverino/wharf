@@ -29,7 +29,14 @@ In order:
 4. Run each `pre_up` entry: `docker compose run --rm -T --build <service>
    </dev/null`.
 5. `docker compose up -d --build --remove-orphans`.
-6. Remove any of step 2's images no longer referenced by a running
+6. Append `<UTC timestamp> <sha> <kind>` to the target's history file
+   (`history_path`, below) — the sha as resolved by the checkout
+   (`$REVISION` may be a tag or branch name), `kind` being `deploy`, or
+   `rollback` when [`operations.rollback`](operations.md) renders the
+   script. Written under `umask 077` and left mode `600`; nothing is
+   recorded if `pre_up` or `up` failed, and a history that can't be
+   written warns instead of failing a deploy whose services are up.
+7. Remove any of step 2's images no longer referenced by a running
    container.
 
 **Why `--build` is mandatory on `pre_up`'s `run`:** `docker compose run`
@@ -59,6 +66,60 @@ debugging a failed migration.
   whatever revision is already checked out. No `pre_up` — reload doesn't
   check out a new revision, so there's nothing new to migrate. Useful
   after rotating a secret, or to just restart services.
+
+## `history_path(remote_repo, target_name)` — and why it isn't in `remote_dir`
+
+`<remote_repo without .git>.wharf/<target>.history`, i.e. beside the bare
+repo. **Not** in `remote_dir`: that's the compose project directory,
+which compose files routinely bind-mount into containers
+(`volumes: [".:/app"]`), and `git checkout -f` leaves untracked files
+alone, so a forged record would survive later deploys. Since this file
+chooses what `wharf rollback` deploys, a workload able to write it could
+send the next rollback to any revision still in the bare repo —
+including one whose bug was since patched. The bare repo is already the
+trusted source of the deployed code, so keeping the record beside it
+adds no trust that isn't there already.
+
+`_TRUST_CHECK` is the shell half of that: before the history is read, it
+must be owned by the user wharf logged in as and not group- or
+other-writable (its directory too). `render_history` refuses outright;
+`render_status` prints `last deploy: not trusted -- …` and reports the
+rest. `stat -c` with the BSD `stat -f` spelling as a fallback; if
+neither answers, the file is not trusted rather than trusted blindly.
+
+## The read-only scripts
+
+`render_status`, `render_logs` and `render_history` back `wharf status`,
+`wharf logs`, and `wharf history`/`wharf rollback`. None of them takes
+the lock or writes anything:
+
+- **`render_status`** prints `revision:` (the bare repo's `HEAD`, which
+  `render_up`'s `checkout -f` moves), `last deploy:` (the history file's
+  last line), `lock:`, and `docker compose ps`. The lock is probed with
+  `flock -n` on a descriptor opened *read-only* (`200<"$lock_file"`), so
+  a status check never creates the lock file; a target that was never
+  deployed prints `not deployed:` and exits 0.
+- **`render_logs`** runs `docker compose logs` with the `--tail`,
+  `--since`, `--follow` and service arguments it was given, all
+  shell-quoted, with `</dev/null` for the same reason as `pre_up`'s
+  `run`. A never-deployed target is an error (exit 1) here — there is
+  nothing to show.
+- **`render_history`** echoes each history line back with the
+  revision's commit subject (looked up in the bare repo; empty if the
+  commit is gone) after a tab, oldest first, optionally only the last
+  `limit` lines — the format
+  [`operations.parse_history`](operations.md) reads. No history file
+  means no output, not an error. Each revision must be a plain hex
+  object name before it reaches `git`: a forged value like
+  `--output=<path>` would otherwise be read by `git log` as an *option*
+  and write that file as the deploy user — from a read-only command.
+  (`--` is no fix: after it, git takes the argument as a pathspec, not a
+  revision.)
+
+`status` and `logs` wrap their compose command with the target's secrets
+(below) when it declares `paths`, like `up` does: compose interpolates
+the file for `ps` and `logs` too, so a `${VAR:?}` reference would
+otherwise fail.
 
 ## Secrets injection
 

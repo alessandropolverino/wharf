@@ -49,6 +49,13 @@ committed in the config. Combined with `StrictHostKeyChecking=yes`, an
 unrecognized or mismatched host key hard-fails the connection instead of
 prompting or silently trusting it.
 
+The line's `host` is bracketed by `_known_hosts_line` on a non-default
+*port*, for any host type — OpenSSH's own convention — and carries no
+port at all for the default one. That's a different rule from
+`config.py`'s `Target.address` (bracket exactly when the host is IPv6,
+always showing the port): the two format different things and
+deliberately don't share one bracketing rule.
+
 Each pinned file is removed at process exit (via `atexit`, like the CI
 key file) rather than right after use: `GIT_SSH_COMMAND` only carries
 the path, and git reads the file later, from its own `ssh` child.
@@ -64,13 +71,20 @@ onto that string itself, so baking a destination into it too would make
 ssh see two destinations and treat the second as a remote command to
 execute.
 
-## `run_streaming(argv, *, description, env=None, input_text=None)`
+## `run_streaming(argv, *, description, env=None, input_text=None, capture=False)`
 
 The one place that shells out to a subprocess. Deliberately does **not**
 capture stdout/stderr — they're left attached to the parent process so
 `git push` progress, `ssh` prompts, and `docker compose build` output
 all show up live, exactly as if you'd typed the command yourself. Raises
-`RemoteCommandError` on non-zero exit.
+`RemoteCommandError` on non-zero exit. With `capture=True` it returns
+stdout as a string instead of streaming it — stderr still streams — for
+the few scripts whose output wharf reads rather than shows.
+
+It flushes Python's own stdout/stderr before starting the child. Python
+block-buffers stdout when it isn't a terminal (a CI log, say) while the
+child writes to the same fd directly, so without the flush a
+`==> Deploying app` header lands *after* the output it introduces.
 
 ## `run_remote_script(target, auth, script, env_vars, *, description)`
 
@@ -88,3 +102,14 @@ Infisical's machine-identity credentials are expected to live (see
 [`configuration.md`](../../docs/configuration.md#secrets)). A plain
 non-login `bash -s` would silently skip that and leave those variables
 unset.
+
+## `capture_remote_script(target, auth, script, env_vars, *, description)`
+
+`run_remote_script` with `capture=True`: same login shell, same command
+line, but the script's stdout comes back as a string. Used for the
+deploy history ([`remote_script.render_history`](remote_script.md)),
+whose lines [`operations`](operations.md) parses rather than shows. Only
+stdout is captured, so ssh prompts and remote error output still appear
+live — and since a login shell may print whatever a profile script
+echoes, the parser on the other side ignores lines that don't look like
+history entries.

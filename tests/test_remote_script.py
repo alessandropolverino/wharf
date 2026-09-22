@@ -1,11 +1,23 @@
 import os
+import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from wharf.config import PreUpStep, SecretsDefaults
-from wharf.remote_script import render_down, render_reload, render_up
+from wharf.remote_script import (
+    history_path,
+    render_down,
+    render_history,
+    render_logs,
+    render_reload,
+    render_status,
+    render_up,
+)
+
+HISTORY = history_path("/srv/git/app.git", "app")
 
 SECRETS = SecretsDefaults(
     provider="infisical",
@@ -20,7 +32,7 @@ def test_render_up_without_secrets_has_no_infisical():
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=None,
+        history_file=HISTORY, secrets=None,
         paths=None,
     )
     assert "infisical" not in script
@@ -32,7 +44,7 @@ def test_render_up_with_secrets_wraps_up_command():
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=SECRETS,
+        history_file=HISTORY, secrets=SECRETS,
         paths=("/app/",),
     )
     assert script.count("infisical login") == 1
@@ -55,7 +67,7 @@ def test_render_up_checkout_happens_before_up_command():
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=None,
+        history_file=HISTORY, secrets=None,
         paths=None,
     )
     checkout_index = script.index('checkout -f "$REVISION"')
@@ -103,7 +115,7 @@ def test_render_up_with_pre_up_runs_before_up_command():
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=None,
+        history_file=HISTORY, secrets=None,
         paths=None,
         pre_up=(PreUpStep(service="migrate-janus"), PreUpStep(service="bootstrap-dashboard-admin")),
     )
@@ -118,7 +130,7 @@ def test_render_up_pre_up_commands_are_shlex_quoted():
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=None,
+        history_file=HISTORY, secrets=None,
         paths=None,
         pre_up=(PreUpStep(service="migrate-janus"),),
     )
@@ -135,7 +147,7 @@ def test_render_up_pre_up_shell_metacharacters_are_neutralized_by_shlex_quote():
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=None,
+        history_file=HISTORY, secrets=None,
         paths=None,
         pre_up=(PreUpStep(service="a$(id)"),),
     )
@@ -148,7 +160,7 @@ def test_render_up_with_pre_up_and_secrets_calls_login_once():
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=SECRETS,
+        history_file=HISTORY, secrets=SECRETS,
         paths=("/core/",),
         pre_up=(
             PreUpStep(service="migrate-janus"),
@@ -167,7 +179,7 @@ def test_render_up_pre_up_step_with_own_paths_scopes_only_that_command():
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=SECRETS,
+        history_file=HISTORY, secrets=SECRETS,
         paths=("/core/",),
         pre_up=(PreUpStep(service="migrate-janus", paths=("/core/migrate/",)),),
     )
@@ -184,7 +196,7 @@ def test_render_up_pre_up_step_without_own_paths_inherits_target_paths():
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=SECRETS,
+        history_file=HISTORY, secrets=SECRETS,
         paths=("/core/",),
         pre_up=(PreUpStep(service="migrate-janus"),),
     )
@@ -196,7 +208,7 @@ def test_render_up_pre_up_step_paths_without_target_paths_still_wraps_only_that_
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=SECRETS,
+        history_file=HISTORY, secrets=SECRETS,
         paths=None,
         pre_up=(PreUpStep(service="migrate-janus", paths=("/core/migrate/",)),),
     )
@@ -211,7 +223,7 @@ def test_render_up_without_pre_up_matches_no_pre_up_behavior():
         remote_repo="/srv/git/app.git",
         remote_dir="/opt/deploys/app",
         compose_file="docker-compose.yml",
-        secrets=None,
+        history_file=HISTORY, secrets=None,
         paths=None,
     )
     assert "run --rm" not in script
@@ -221,7 +233,7 @@ def _all_scripts(remote_dir: str = "/opt/deploys/app") -> dict[str, str]:
     return {
         "up": render_up(
             remote_repo="/srv/git/app.git", remote_dir=remote_dir,
-            compose_file="docker-compose.yml", secrets=None, paths=None,
+            compose_file="docker-compose.yml", history_file=HISTORY, secrets=None, paths=None,
         ),
         "down": render_down(remote_dir=remote_dir, compose_file="docker-compose.yml", volumes=False),
         "reload": render_reload(remote_dir=remote_dir, compose_file="docker-compose.yml", secrets=None, paths=None),
@@ -277,3 +289,397 @@ def test_script_proceeds_when_the_lock_is_free(tmp_path, fake_docker):
 
     assert result.returncode == 0, result.stderr
     assert fake_docker.read_text() == "compose -f docker-compose.yml down\n"
+
+
+# --- history recording, and the read-only status/logs/history scripts ---
+
+def _up(**overrides):
+    params = dict(
+        remote_repo="/srv/git/app.git", remote_dir="/opt/deploys/app",
+        compose_file="docker-compose.yml", history_file=HISTORY, secrets=None, paths=None,
+    )
+    params.update(overrides)
+    return render_up(**params)
+
+
+def test_render_up_records_the_resolved_revision_once_services_are_up():
+    script = _up()
+    # never inside remote_dir: compose files routinely bind-mount that
+    assert f"history_file={HISTORY}" in script
+    assert "/opt/deploys/app/.wharf" not in script
+    resolve_index = script.index('deployed_revision=$(git --git-dir="$remote_repo" rev-parse HEAD)')
+    up_index = script.index("up -d --build --remove-orphans")
+    record_index = script.index('"$deployed_revision" deploy >> "$history_file"')
+    assert resolve_index < up_index < record_index
+
+
+def test_render_up_kind_rollback_is_recorded_as_such():
+    assert '"$deployed_revision" rollback >> "$history_file"' in _up(kind="rollback")
+
+
+def test_render_status_only_reads():
+    script = render_status(
+        remote_repo="/srv/git/app.git", remote_dir="/opt/deploys/app",
+        compose_file="docker-compose.yml", history_file=HISTORY, secrets=None, paths=None,
+    )
+    assert "mkdir" not in script and ">>" not in script
+    assert "flock -n 200" in script and '200<"$lock_file"' in script  # a read-only descriptor
+    assert 'docker compose -f "$compose_file" ps' in script
+    assert "infisical" not in script
+
+
+def test_render_status_wraps_ps_with_secrets_when_target_has_paths():
+    script = render_status(
+        remote_repo="/srv/git/app.git", remote_dir="/opt/deploys/app",
+        compose_file="docker-compose.yml", history_file=HISTORY, secrets=SECRETS, paths=("/app/",),
+    )
+    assert script.count("infisical login") == 1
+    assert (
+        "infisical run --env=prod --path=/app/ --projectId=proj-123 --domain=https://eu.infisical.com "
+        '-- docker compose -f "$compose_file" ps'
+    ) in script
+
+
+def test_render_logs_passes_flags_and_quoted_services():
+    script = render_logs(
+        remote_dir="/opt/deploys/app", compose_file="docker-compose.yml", secrets=None, paths=None,
+        services=("api", "a$(id)"), follow=True, tail="all", since="30m",
+    )
+    assert (
+        'docker compose -f "$compose_file" logs --tail=all --since=30m --follow api \'a$(id)\' </dev/null'
+    ) in script
+
+
+def test_render_logs_defaults_to_the_last_100_lines_of_every_service():
+    script = render_logs(remote_dir="/opt/deploys/app", compose_file="docker-compose.yml", secrets=None, paths=None)
+    assert 'docker compose -f "$compose_file" logs --tail=100 </dev/null' in script
+
+
+def test_render_history_limit_keeps_the_newest_entries():
+    assert 'tail -n 5 "$history_file"' in render_history(
+        remote_repo="/srv/git/app.git", history_file=HISTORY, limit=5
+    )
+    assert 'cat "$history_file"' in render_history(remote_repo="/srv/git/app.git", history_file=HISTORY)
+
+
+@pytest.fixture
+def bare_repo(tmp_path):
+    """A bare repo holding two commits (v1, v2), like a target's remote_repo after two pushes."""
+    src = tmp_path / "src"
+    src.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(src), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    git("checkout", "-q", "-b", "main")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "test")
+    (src / "docker-compose.yml").write_text("services: {}\n")
+    shas = []
+    for version in ("v1", "v2"):
+        (src / "app.txt").write_text(version + "\n")
+        git("add", ".")
+        git("commit", "-q", "-m", version)
+        shas.append(git("rev-parse", "HEAD"))
+    bare = tmp_path / "app.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    git("push", "-q", str(bare), "HEAD:refs/heads/main")
+    return bare, shas
+
+
+def _run_up(bare: Path, remote_dir: Path, revision: str, **overrides) -> None:
+    params = dict(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml",
+        history_file=history_path(str(bare), "app"), secrets=None, paths=None,
+    )
+    params.update(overrides)
+    script = render_up(**params)
+    subprocess.run(
+        ["bash", "-s"], input=script, text=True, check=True, capture_output=True,
+        env={**os.environ, "REVISION": revision},
+    )
+
+
+def _run(script: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", "-s"], input=script, text=True, capture_output=True)
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_up_script_appends_each_successful_deploy_to_the_history(tmp_path, fake_docker, bare_repo):
+    bare, (v1, v2) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    # A compose file name the repo doesn't contain: the old-image scan that
+    # runs once it exists uses `mapfile`, which macOS's bash 3.2 lacks.
+    common = {"compose_file": "compose.other.yml"}
+
+    _run_up(bare, remote_dir, v1, **common)
+    _run_up(bare, remote_dir, "main", **common)  # a ref name, recorded as v2's sha
+    _run_up(bare, remote_dir, v1, kind="rollback", **common)
+
+    history = Path(history_path(str(bare), "app"))
+    lines = history.read_text().splitlines()
+    assert [line.split()[1:] for line in lines] == [[v1, "deploy"], [v2, "deploy"], [v1, "rollback"]]
+    # no history in the deploy dir, which compose routinely bind-mounts
+    # (the lock file stays there: forging it only blocks your own deploy)
+    assert not list(remote_dir.glob("*history*"))
+    assert history.stat().st_mode & 0o077 == 0        # owner-only file
+    assert history.parent.stat().st_mode & 0o077 == 0  # owner-only directory
+    assert all(re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", line.split()[0]) for line in lines)
+    assert (remote_dir / "app.txt").read_text() == "v1\n"
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_up_script_records_nothing_when_up_fails(tmp_path, bare_repo, monkeypatch):
+    bare, (v1, _) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    failing_docker = bin_dir / "docker"
+    failing_docker.write_text("#!/bin/sh\nexit 1\n")
+    failing_docker.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _run_up(bare, remote_dir, v1, compose_file="compose.other.yml")
+
+    assert not Path(history_path(str(bare), "app")).exists()
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_up_script_warns_instead_of_recording_into_a_writable_state_directory(tmp_path, fake_docker, bare_repo):
+    bare, (v1, _) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    history_file = Path(history_path(str(bare), "app"))
+    history_file.parent.mkdir(parents=True)
+    history_file.parent.chmod(0o777)  # e.g. left behind by something else -- anyone could swap in a symlink
+
+    script = render_up(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="compose.other.yml",
+        history_file=str(history_file), secrets=None, paths=None,
+    )
+    result = subprocess.run(
+        ["bash", "-s"], input=script, text=True, capture_output=True,
+        env={**os.environ, "REVISION": v1},
+    )
+
+    assert result.returncode == 0  # the deploy itself still succeeds
+    assert (remote_dir / "app.txt").read_text() == "v1\n"
+    assert not history_file.exists()  # nothing was appended into the untrusted directory
+    assert "not recording this deploy" in result.stderr
+    assert "writable by group or other" in result.stderr
+
+
+def test_status_script_reports_a_never_deployed_target(tmp_path, bare_repo):
+    bare, _ = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    script = render_status(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml",
+        history_file=history_path(str(bare), "app"), secrets=None, paths=None,
+    )
+
+    result = _run(script)
+
+    assert result.returncode == 0
+    assert result.stdout == f"not deployed: {remote_dir} does not exist\n"
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_status_script_reports_revision_last_deploy_lock_and_services(tmp_path, fake_docker, bare_repo):
+    bare, (_, v2) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    _run_up(bare, remote_dir, v2)
+    fake_docker.write_text("")
+    script = render_status(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml",
+        history_file=history_path(str(bare), "app"), secrets=None, paths=None,
+    )
+
+    lines = _run(script).stdout.splitlines()
+
+    assert lines[0] == f"revision: {v2[:7]} v2"
+    assert lines[1].startswith("last deploy: 20") and lines[1].endswith(f"Z (deploy of {v2[:7]})")
+    assert lines[2] == "lock: free"
+    assert fake_docker.read_text() == "compose -f docker-compose.yml ps\n"
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_status_script_sees_a_lock_held_by_a_running_deploy(tmp_path, bare_repo):
+    import fcntl  # POSIX-only, like flock itself
+
+    bare, _ = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    remote_dir.mkdir(parents=True)
+    lock = remote_dir / ".wharf-deploy.lock"
+    lock.touch()
+    script = render_status(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml",
+        history_file=history_path(str(bare), "app"), secrets=None, paths=None,
+    )
+
+    with open(lock, "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        while_held = _run(script).stdout
+    after = _run(script).stdout
+
+    assert "lock: held (a deploy, down or reload is running)" in while_held
+    assert "lock: free\n" in after
+    assert "last deploy: no history recorded" in after
+    assert lock.stat().st_size == 0  # probing never wrote to it
+
+
+def test_logs_script_runs_compose_logs_in_remote_dir(tmp_path, fake_docker):
+    remote_dir = tmp_path / "deploys" / "app"
+    remote_dir.mkdir(parents=True)
+    script = render_logs(
+        remote_dir=str(remote_dir), compose_file="docker-compose.yml", secrets=None, paths=None,
+        services=("api",), tail="20",
+    )
+
+    assert _run(script).returncode == 0
+    assert fake_docker.read_text() == "compose -f docker-compose.yml logs --tail=20 api\n"
+
+
+def test_logs_script_fails_clearly_on_a_never_deployed_target(tmp_path, fake_docker):
+    script = render_logs(remote_dir=str(tmp_path / "nope"), compose_file="docker-compose.yml", secrets=None, paths=None)
+
+    result = _run(script)
+
+    assert result.returncode == 1
+    assert "not deployed" in result.stderr
+    assert not fake_docker.exists()
+
+
+def test_history_script_echoes_entries_with_their_commit_subjects(tmp_path, bare_repo):
+    bare, (v1, v2) = bare_repo
+    history = Path(history_path(str(bare), "app"))
+    history.parent.mkdir(parents=True)
+    gone = "0" * 40  # a revision the bare repo no longer has
+    history.write_text(
+        f"2026-09-17T10:00:00Z {v1} deploy\n2026-09-17T11:00:00Z {v2} deploy\n2026-09-17T12:00:00Z {gone} rollback\n"
+    )
+
+    result = _run(render_history(remote_repo=str(bare), history_file=history_path(str(bare), "app")))
+
+    assert result.returncode == 0
+    assert result.stdout == (
+        f"2026-09-17T10:00:00Z {v1} deploy\tv1\n"
+        f"2026-09-17T11:00:00Z {v2} deploy\tv2\n"
+        f"2026-09-17T12:00:00Z {gone} rollback\t\n"
+    )
+    limited = _run(render_history(remote_repo=str(bare), history_file=history_path(str(bare), "app"), limit=1))
+    assert limited.stdout == f"2026-09-17T12:00:00Z {gone} rollback\t\n"
+
+
+def test_history_script_prints_nothing_without_a_history_file(tmp_path, bare_repo):
+    bare, _ = bare_repo
+    result = _run(render_history(remote_repo=str(bare), history_file=history_path(str(bare), "app")))
+    assert (result.returncode, result.stdout) == (0, "")
+
+
+# --- the history decides what `wharf rollback` deploys, so it lives where
+# workloads can't reach it, and is only believed when its mode says so ---
+
+def test_history_path_is_beside_the_bare_repo_never_in_the_deploy_dir():
+    path = history_path("/srv/git/myapp.git", "api")
+    assert path == "/srv/git/myapp.wharf/api.history"
+    assert not path.startswith("/opt/deploys")  # remote_dir is bind-mounted into containers
+    # one file per target, so two targets sharing a bare repo don't collide
+    assert history_path("/srv/git/myapp.git", "worker") != path
+    # a remote_repo without the .git suffix still gets its own state dir
+    assert history_path("/srv/git/myapp", "api") == "/srv/git/myapp.wharf/api.history"
+
+
+def _write_history(bare: Path, text: str) -> Path:
+    """A history file with the ownership and mode a real deploy leaves."""
+    history = Path(history_path(str(bare), "app"))
+    history.parent.mkdir(parents=True, exist_ok=True)
+    history.parent.chmod(0o700)
+    history.write_text(text)
+    history.chmod(0o600)
+    return history
+
+
+def test_history_script_refuses_a_history_anyone_could_have_written(tmp_path, bare_repo):
+    bare, (v1, _) = bare_repo
+    history = _write_history(bare, f"2026-09-17T10:00:00Z {v1} deploy\n")
+    assert _run(render_history(remote_repo=str(bare), history_file=str(history))).returncode == 0
+
+    history.chmod(0o666)  # e.g. a container wrote it through a bind mount
+
+    result = _run(render_history(remote_repo=str(bare), history_file=str(history)))
+
+    assert result.returncode == 1
+    assert "refusing to read the deploy history" in result.stderr
+    assert "writable by group or other" in result.stderr
+    assert result.stdout == ""  # no record is offered to rollback
+
+
+def test_history_script_refuses_when_the_state_directory_is_writable(tmp_path, bare_repo):
+    bare, (v1, _) = bare_repo
+    history = _write_history(bare, f"2026-09-17T10:00:00Z {v1} deploy\n")
+    history.parent.chmod(0o777)  # anyone could swap the file out
+
+    result = _run(render_history(remote_repo=str(bare), history_file=str(history)))
+
+    assert result.returncode == 1
+    assert "refusing to read the deploy history" in result.stderr
+
+
+def test_history_script_ignores_a_revision_that_is_really_a_git_option(tmp_path, bare_repo):
+    # A forged "revision" like --output=<path> was passed straight to `git log`,
+    # which took it as an option and wrote that file as the deploy user -- from
+    # the read-only `wharf history`. Revisions must be plain hex object names.
+    bare, (v1, _) = bare_repo
+    payload = tmp_path / "PWNED"
+    history = _write_history(
+        bare,
+        f"2026-09-17T10:00:00Z {v1} deploy\n"
+        f"2026-09-17T11:00:00Z --output={payload} deploy\n"
+        "2026-09-17T12:00:00Z ../../etc/passwd deploy\n"
+        "2026-09-17T13:00:00Z deadbeef deploy\n",  # too short to be an object name
+    )
+
+    result = _run(render_history(remote_repo=str(bare), history_file=str(history)))
+
+    assert result.returncode == 0
+    assert not payload.exists(), "git wrote a file chosen by the history"
+    assert result.stdout == f"2026-09-17T10:00:00Z {v1} deploy\tv1\n"
+
+
+def test_status_script_says_so_rather_than_quoting_an_untrusted_history(tmp_path, fake_docker, bare_repo):
+    bare, (v1, _) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    remote_dir.mkdir(parents=True)
+    history = _write_history(bare, f"2026-09-17T10:00:00Z {v1} deploy\n")
+    history.chmod(0o666)
+    script = render_status(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml",
+        history_file=str(history), secrets=None, paths=None,
+    )
+
+    result = _run(script)
+
+    assert result.returncode == 0  # the rest of the status still reports
+    last_deploy = next(line for line in result.stdout.splitlines() if line.startswith("last deploy:"))
+    assert "not trusted" in last_deploy
+    assert v1[:7] not in last_deploy
+
+
+def test_status_script_says_so_when_the_state_directory_is_writable(tmp_path, fake_docker, bare_repo):
+    bare, (v1, _) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    remote_dir.mkdir(parents=True)
+    history = _write_history(bare, f"2026-09-17T10:00:00Z {v1} deploy\n")
+    history.parent.chmod(0o777)  # anyone could swap the file out -- the file itself is still 0600
+    script = render_status(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml",
+        history_file=str(history), secrets=None, paths=None,
+    )
+
+    result = _run(script)
+
+    assert result.returncode == 0  # the rest of the status still reports
+    last_deploy = next(line for line in result.stdout.splitlines() if line.startswith("last deploy:"))
+    assert "not trusted" in last_deploy
+    assert v1[:7] not in last_deploy

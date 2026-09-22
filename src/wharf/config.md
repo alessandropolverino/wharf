@@ -23,7 +23,11 @@ the schema.
   `port`, `user`, `host_key`, `order`, plus optional `healthcheck`,
   `compose_file`, `paths`, `pre_up`.
   - `address` — `host:port`, with an IPv6 host bracketed
-    (`[2001:db8::1]:22`); used for progress output and the push URL.
+    (`[2001:db8::1]:22`); used for progress output and the push URL. A
+    different rule from `ssh.py`'s known-hosts line, which brackets on
+    a non-default *port* instead (any host type) and drops the port
+    entirely for the default one — the two answer different questions
+    and aren't meant to share one bracketing rule (see `ssh.md`).
   - `uses_secrets` — true if the target's own `up` (via `paths`) or any
     `pre_up` step injects secrets.
 - **`SecretsDefaults`** — shared Infisical location, defined once per
@@ -82,7 +86,13 @@ command-injection or credential-exfiltration vector — see also
   leading `-` (which could be parsed as a flag), and structurally
   anything that isn't a plausible compose service name. This is
   defense-in-depth: `remote_script.py` also `shlex.quote()`s every
-  service name at render time, independently of this regex.
+  service name at render time, independently of this regex. The
+  validator, `compose_service_name`, is public: the CLI applies it to
+  `wharf logs SERVICE...` too.
+- **`name`** must match `^[A-Za-z0-9][A-Za-z0-9._-]*$` — it becomes a
+  path component of that target's deploy-history file (see
+  [`remote_script.md`](remote_script.md)), so `/` or `..` would escape
+  the state directory.
 - **`user`** must match `^[A-Za-z0-9_][A-Za-z0-9._@-]*$`. It's the first
   half of the `user@host` argument handed to `ssh`, so a leading `-`
   would be parsed as an option — `-oProxyCommand=...` runs a local

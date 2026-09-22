@@ -8,18 +8,33 @@ piling more changes on top of a broken deploy.
 
 Each action also has a dry-run mode that prints, per target, exactly what
 would be pushed and piped to the target's shell, without connecting.
+
+``status``, ``logs`` and ``history`` are read-only views of a target, so
+unlike the others they don't enforce a config's ``ensure_branch``: nothing
+they do can happen "by accident" the way a deploy from the wrong branch
+can. ``rollback`` re-deploys an earlier revision, chosen from the
+target's own deploy history (which every successful ``up`` records).
 """
 
 from __future__ import annotations
 
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Config, Target, render_repo_template
 from .healthcheck import wait_healthy
-from .remote_script import render_down, render_reload, render_up
-from .ssh import SessionAuth, remote_command, run_remote_script
+from .remote_script import (
+    history_path,
+    render_down,
+    render_history,
+    render_logs,
+    render_reload,
+    render_status,
+    render_up,
+)
+from .ssh import SessionAuth, capture_remote_script, remote_command, run_remote_script
 from .git_ops import push_refspec, push_revision, push_url
 
 
@@ -40,6 +55,31 @@ class BranchMismatchError(RuntimeError):
             f"ensure_branch: this config requires branch '{expected}', "
             f"but the current checkout is on '{actual}'"
         )
+
+
+class InvalidRevisionError(ValueError):
+    """Raised when a ``--revision`` isn't a hex object name."""
+
+    def __init__(self, revision: str):
+        super().__init__(
+            f"revision must be a hex commit SHA, not {revision!r} -- a value git could "
+            "read as an option (e.g. one starting with '-') must never reach `git checkout`"
+        )
+
+
+_REVISION_RE = re.compile(r"[0-9a-f]+")
+
+
+def _check_revision(revision: str) -> None:
+    """Rejects anything but a hex object name, before it reaches `git checkout`.
+
+    Mirrors the hex-only check :func:`wharf.remote_script.render_history`
+    already applies to revisions read back from the deploy history: a
+    value like ``--upload-pack=...`` is read by git as an *option*, not a
+    revision, when it's the sole argument after ``checkout -f``.
+    """
+    if not _REVISION_RE.fullmatch(revision):
+        raise InvalidRevisionError(revision)
 
 
 def infer_current_branch(cwd: Path | None = None) -> str:
@@ -114,9 +154,44 @@ def _show_remote_script(target: Target, script: str, env_vars: dict[str, str]) -
     fed to the remote shell's stdin.
     """
     command = " ".join(remote_command(env_vars))
-    print(f"Would run on {target.user}@{target.host} (port {target.port}): {command} <<'WHARF_SCRIPT'")
+    print(f"Would run on {target.user}@{target.address}: {command} <<'WHARF_SCRIPT'")
     print(script, end="")
     print("WHARF_SCRIPT")
+
+
+def _cached_auth(force_ci: bool | None, identity: str | None):
+    """A callable that resolves :class:`SessionAuth` once and reuses it.
+
+    Session auth doesn't vary per target, so re-resolving it for each one
+    in a multi-target run is pure waste -- in CI mode, every resolve
+    writes the deploy key out to a fresh temp file. Deferred to first use
+    rather than resolved up front so a resolve failure still surfaces
+    from inside the first target's own error handling (as
+    :class:`OperationError`), exactly as if it were still resolved
+    per-target.
+    """
+    cache: dict[str, SessionAuth] = {}
+
+    def get() -> SessionAuth:
+        if "auth" not in cache:
+            cache["auth"] = SessionAuth.resolve(force_ci=force_ci, identity=identity)
+        return cache["auth"]
+
+    return get
+
+
+def _for_each_target(targets: list[Target], action) -> None:
+    """Runs ``action(target)`` for each of ``targets`` in order.
+
+    Whatever ``action`` raises is re-raised as :class:`OperationError` so
+    the caller always knows which target failed; the first failure stops
+    the run, leaving later targets untouched (see the module docstring).
+    """
+    for target in targets:
+        try:
+            action(target)
+        except Exception as exc:  # noqa: BLE001 - re-raised with target context
+            raise OperationError(target.name, exc) from exc
 
 
 def deploy(
@@ -134,37 +209,40 @@ def deploy(
     With ``dry_run``, print each target's push and deploy script instead:
     nothing is connected to, so no credentials are needed either.
     """
+    _check_revision(revision)
     _check_branch(config)
-    for target in config.select_targets(only):
+    get_auth = _cached_auth(force_ci, identity)
+
+    def _deploy_to(target: Target) -> None:
         print(_header("Deploying", target, dry_run))
         remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
-        try:
-            script = render_up(
-                remote_repo=remote_repo,
-                remote_dir=remote_dir,
-                compose_file=config.compose_file_for(target),
-                secrets=config.secrets,
-                paths=target.paths,
-                pre_up=target.pre_up,
-            )
-            env_vars = {"REVISION": revision}
-            if dry_run:
-                push = f"git push {push_url(target, remote_repo)} {push_refspec(revision, config.branch)}"
-                print(f"Would run locally: {push}")
-                _show_remote_script(target, script, env_vars)
-                if target.healthcheck:
-                    print(f"Would then poll {target.healthcheck} until it responds")
-                continue
-            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
-            push_revision(target, remote_repo, config.branch, revision, auth)
-            run_remote_script(
-                target, auth, script, env_vars,
-                description=f"deploy on {target.name}",
-            )
+        script = render_up(
+            remote_repo=remote_repo,
+            remote_dir=remote_dir,
+            compose_file=config.compose_file_for(target),
+            history_file=history_path(remote_repo, target.name),
+            secrets=config.secrets,
+            paths=target.paths,
+            pre_up=target.pre_up,
+        )
+        env_vars = {"REVISION": revision}
+        if dry_run:
+            push = f"git push {push_url(target, remote_repo)} {push_refspec(revision, config.branch)}"
+            print(f"Would run locally: {push}")
+            _show_remote_script(target, script, env_vars)
             if target.healthcheck:
-                wait_healthy(target.healthcheck)
-        except Exception as exc:  # noqa: BLE001 - re-raised with target context below
-            raise OperationError(target.name, exc) from exc
+                print(f"Would then poll {target.healthcheck} until it responds")
+            return
+        auth = get_auth()
+        push_revision(target, remote_repo, config.branch, revision, auth)
+        run_remote_script(
+            target, auth, script, env_vars,
+            description=f"deploy on {target.name}",
+        )
+        if target.healthcheck:
+            wait_healthy(target.healthcheck)
+
+    _for_each_target(config.select_targets(only), _deploy_to)
 
 
 def down(
@@ -179,25 +257,25 @@ def down(
 ) -> None:
     """Stop (and optionally wipe volumes for) each selected target."""
     _check_branch(config)
-    for target in config.select_targets(only):
+    get_auth = _cached_auth(force_ci, identity)
+
+    def _down_on(target: Target) -> None:
         print(_header("Stopping", target, dry_run))
         _, remote_dir = _remote_repo_and_dir(config, target, repo)
-        try:
-            script = render_down(
-                remote_dir=remote_dir,
-                compose_file=config.compose_file_for(target),
-                volumes=volumes,
-            )
-            if dry_run:
-                _show_remote_script(target, script, {})
-                continue
-            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
-            run_remote_script(
-                target, auth, script, {},
-                description=f"down on {target.name}",
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise OperationError(target.name, exc) from exc
+        script = render_down(
+            remote_dir=remote_dir,
+            compose_file=config.compose_file_for(target),
+            volumes=volumes,
+        )
+        if dry_run:
+            _show_remote_script(target, script, {})
+            return
+        run_remote_script(
+            target, get_auth(), script, {},
+            description=f"down on {target.name}",
+        )
+
+    _for_each_target(config.select_targets(only), _down_on)
 
 
 def reload(
@@ -211,27 +289,281 @@ def reload(
 ) -> None:
     """Re-apply compose (no rebuild) for each selected target."""
     _check_branch(config)
-    for target in config.select_targets(only):
+    get_auth = _cached_auth(force_ci, identity)
+
+    def _reload_on(target: Target) -> None:
         print(_header("Reloading", target, dry_run))
         _, remote_dir = _remote_repo_and_dir(config, target, repo)
-        try:
-            script = render_reload(
-                remote_dir=remote_dir,
-                compose_file=config.compose_file_for(target),
-                secrets=config.secrets,
-                paths=target.paths,
-            )
-            if dry_run:
-                _show_remote_script(target, script, {})
-                if target.healthcheck:
-                    print(f"Would then poll {target.healthcheck} until it responds")
-                continue
-            auth = SessionAuth.resolve(force_ci=force_ci, identity=identity)
-            run_remote_script(
-                target, auth, script, {},
-                description=f"reload on {target.name}",
-            )
+        script = render_reload(
+            remote_dir=remote_dir,
+            compose_file=config.compose_file_for(target),
+            secrets=config.secrets,
+            paths=target.paths,
+        )
+        if dry_run:
+            _show_remote_script(target, script, {})
             if target.healthcheck:
-                wait_healthy(target.healthcheck)
-        except Exception as exc:  # noqa: BLE001
-            raise OperationError(target.name, exc) from exc
+                print(f"Would then poll {target.healthcheck} until it responds")
+            return
+        run_remote_script(
+            target, get_auth(), script, {},
+            description=f"reload on {target.name}",
+        )
+        if target.healthcheck:
+            wait_healthy(target.healthcheck)
+
+    _for_each_target(config.select_targets(only), _reload_on)
+
+
+_HISTORY_LINE_RE = re.compile(r"^(\S+) ([0-9a-f]{40,64}) (deploy|rollback)(?:\t(.*))?$")
+
+
+@dataclass(frozen=True)
+class DeployRecord:
+    """One entry of a target's deploy history (see remote_script.render_history)."""
+
+    timestamp: str
+    revision: str
+    kind: str
+    subject: str = ""
+
+    @property
+    def short(self) -> str:
+        return self.revision[:7]
+
+    def describe(self) -> str:
+        return f"{self.short} {self.subject}".rstrip()
+
+
+def parse_history(text: str) -> list[DeployRecord]:
+    """Turn `render_history` output into records, oldest first.
+
+    Only lines shaped like history entries count: the script runs in a
+    login shell, so anything a profile script prints is skipped rather
+    than mistaken for a deploy.
+    """
+    records = []
+    for line in text.splitlines():
+        match = _HISTORY_LINE_RE.match(line)
+        if match:
+            timestamp, revision, kind, subject = match.groups()
+            records.append(DeployRecord(timestamp, revision, kind, subject or ""))
+    return records
+
+
+def rollback_target(records: list[DeployRecord], steps: int = 1) -> tuple[DeployRecord, DeployRecord]:
+    """The ``(current, previous)`` pair a rollback of ``steps`` moves between.
+
+    Each revision counts once, at its most recent deploy, so a rollback
+    never lands on the current revision: after ``v1, v2, v3`` and a
+    rollback to ``v2``, two steps back is ``v1``, not ``v2`` again. Raises
+    RuntimeError, with the reason, when the history can't support it.
+    """
+    distinct: list[DeployRecord] = []
+    seen: set[str] = set()
+    for record in reversed(records):
+        if record.revision not in seen:
+            seen.add(record.revision)
+            distinct.append(record)
+    if not distinct:
+        raise RuntimeError(
+            "no deploy history on this target (deployed by an older wharf, or never deployed); "
+            "use `wharf deploy --revision <sha>` instead"
+        )
+    if steps >= len(distinct):
+        raise RuntimeError(
+            f"the history only goes back {len(distinct) - 1} distinct revision(s) before "
+            f"the current one, so it can't roll back {steps}"
+        )
+    return distinct[0], distinct[steps]
+
+
+def _read_history(
+    target: Target, auth: SessionAuth, remote_repo: str, limit: int | None,
+) -> list[DeployRecord]:
+    script = render_history(
+        remote_repo=remote_repo, history_file=history_path(remote_repo, target.name), limit=limit,
+    )
+    output = capture_remote_script(target, auth, script, {}, description=f"read deploy history on {target.name}")
+    return parse_history(output)
+
+
+def status(
+    config: Config,
+    *,
+    repo: str,
+    only: tuple[str, ...] = (),
+    force_ci: bool | None = None,
+    identity: str | None = None,
+) -> None:
+    """Report each selected target's checked-out revision, last deploy, lock, and services. Read-only.
+
+    Doesn't require ``ensure_branch``: unlike the other actions, nothing
+    here can accidentally change a target, so there's nothing to guard
+    against.
+    """
+    get_auth = _cached_auth(force_ci, identity)
+
+    def _status_of(target: Target) -> None:
+        print(_header("Status of", target, False))
+        remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
+        script = render_status(
+            remote_repo=remote_repo,
+            remote_dir=remote_dir,
+            compose_file=config.compose_file_for(target),
+            history_file=history_path(remote_repo, target.name),
+            secrets=config.secrets,
+            paths=target.paths,
+        )
+        run_remote_script(target, get_auth(), script, {}, description=f"status on {target.name}")
+
+    _for_each_target(config.select_targets(only), _status_of)
+
+
+def logs(
+    config: Config,
+    *,
+    repo: str,
+    only: tuple[str, ...] = (),
+    services: tuple[str, ...] = (),
+    follow: bool = False,
+    tail: str = "100",
+    since: str | None = None,
+    force_ci: bool | None = None,
+    identity: str | None = None,
+) -> None:
+    """Show (or follow) each selected target's compose logs. Read-only.
+
+    Following never returns on its own, so it's only allowed for a single
+    target -- the CLI checks that before getting here. Doesn't require
+    ``ensure_branch``: see :func:`status`.
+    """
+    targets = config.select_targets(only)
+    if follow and len(targets) != 1:
+        raise ValueError("--follow streams one target at a time")
+    get_auth = _cached_auth(force_ci, identity)
+
+    def _logs_from(target: Target) -> None:
+        print(_header("Logs from", target, False))
+        _, remote_dir = _remote_repo_and_dir(config, target, repo)
+        script = render_logs(
+            remote_dir=remote_dir,
+            compose_file=config.compose_file_for(target),
+            secrets=config.secrets,
+            paths=target.paths,
+            services=services,
+            follow=follow,
+            tail=tail,
+            since=since,
+        )
+        run_remote_script(target, get_auth(), script, {}, description=f"logs on {target.name}")
+
+    _for_each_target(targets, _logs_from)
+
+
+def history(
+    config: Config,
+    *,
+    repo: str,
+    only: tuple[str, ...] = (),
+    limit: int | None = None,
+    force_ci: bool | None = None,
+    identity: str | None = None,
+) -> None:
+    """Print each selected target's deploy history, newest first. Read-only.
+
+    Doesn't require ``ensure_branch``: see :func:`status`.
+    """
+    get_auth = _cached_auth(force_ci, identity)
+
+    def _history_of(target: Target) -> None:
+        print(_header("History of", target, False))
+        remote_repo, _ = _remote_repo_and_dir(config, target, repo)
+        records = _read_history(target, get_auth(), remote_repo, limit)
+        if not records:
+            print("  no deploy history recorded (deployed by an older wharf, or never deployed)")
+            return
+        for index, record in enumerate(reversed(records)):
+            marker = "  <- current" if index == 0 else ""
+            print(f"  {record.timestamp}  {record.short}  {record.kind:<8}  {record.subject}{marker}")
+
+    _for_each_target(config.select_targets(only), _history_of)
+
+
+def _history_for_rollback(
+    target: Target, auth: SessionAuth, remote_repo: str, steps: int,
+) -> list[DeployRecord]:
+    """Enough of a target's history to resolve a rollback of ``steps``.
+
+    :func:`rollback_target` only ever needs the first ``steps + 1``
+    distinct revisions counting back from the end, but
+    ``render_history`` looks up each line's commit subject with its own
+    remote `git log` call -- reading the *whole* history to resolve one
+    rollback costs one remote process per deploy the target has ever
+    had. Starting from a bounded tail and growing it only if that's not
+    enough distinct revisions yet answers exactly as reading everything
+    would, in one round trip for the common case of a target that isn't
+    repeatedly redeploying the same revision.
+    """
+    limit = max(4 * (steps + 1), 20)
+    while True:
+        records = _read_history(target, auth, remote_repo, limit)
+        distinct = len({record.revision for record in records})
+        if distinct > steps or len(records) < limit:
+            return records  # enough distinct revisions, or that's all there is
+        limit *= 4
+
+
+def rollback(
+    config: Config,
+    *,
+    repo: str,
+    only: tuple[str, ...] = (),
+    steps: int = 1,
+    force_ci: bool | None = None,
+    identity: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Re-deploy, on each selected target, the revision deployed before the current one.
+
+    Each target's own history decides what "before" means (see
+    :func:`rollback_target`), and the revision is checked out from the
+    bare repo already on that target: nothing is pushed, so this works
+    even where the commit no longer exists locally (a CI runner, say).
+    Otherwise it's a deploy -- the same script, ``pre_up`` included, then
+    the healthcheck -- recorded in the history as a ``rollback``.
+
+    Unlike the other dry runs, this one has to read each target's history
+    to know what it would deploy, so it does connect (read-only).
+    """
+    _check_branch(config)
+    get_auth = _cached_auth(force_ci, identity)
+
+    def _rollback_on(target: Target) -> None:
+        print(_header("Rolling back", target, dry_run))
+        remote_repo, remote_dir = _remote_repo_and_dir(config, target, repo)
+        auth = get_auth()
+        records = _history_for_rollback(target, auth, remote_repo, steps)
+        current, previous = rollback_target(records, steps)
+        print(f"{current.describe()} -> {previous.describe()} (deployed {previous.timestamp})")
+        script = render_up(
+            remote_repo=remote_repo,
+            remote_dir=remote_dir,
+            compose_file=config.compose_file_for(target),
+            secrets=config.secrets,
+            history_file=history_path(remote_repo, target.name),
+            paths=target.paths,
+            pre_up=target.pre_up,
+            kind="rollback",
+        )
+        env_vars = {"REVISION": previous.revision}
+        if dry_run:
+            _show_remote_script(target, script, env_vars)
+            if target.healthcheck:
+                print(f"Would then poll {target.healthcheck} until it responds")
+            return
+        run_remote_script(target, auth, script, env_vars, description=f"rollback on {target.name}")
+        if target.healthcheck:
+            wait_healthy(target.healthcheck)
+
+    _for_each_target(config.select_targets(only), _rollback_on)

@@ -13,7 +13,11 @@ Its two building blocks are public because
   (`ssh://deploy@[2001:db8::1]:22/...`). Unbracketed, git can't tell
   where the address ends and the port begins, and hands ssh a mangled
   destination with no `-p`.
-- **`push_refspec(revision, branch)`** — `<revision>:refs/heads/<branch>`.
+- **`push_refspec(revision, branch)`** — `+<revision>:refs/heads/<branch>`.
+  Forced on purpose: that branch only ever mirrors "the revision last
+  pushed for deployment", nobody fast-forwards along it, and without the
+  `+` a `deploy --revision <older sha>` is rejected as a non-fast-forward
+  update — precisely when it's wanted.
 
 This push is what **stands in for a container registry**: after it
 succeeds, the target has the exact source tree at `revision` sitting in

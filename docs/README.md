@@ -3,7 +3,8 @@
 - **[how-it-works.md](how-it-works.md)** — architecture: the end-to-end
   deploy flow, and what wharf adds on top of plain `docker compose`
   (no-registry git delivery, sequential multi-target rollout, `pre_up`
-  migrations, secrets injection, locking, image pruning, healthchecks).
+  migrations, secrets injection, locking, image pruning, healthchecks,
+  deploy history and rollback).
 - **[configuration.md](configuration.md)** — the full config file
   schema (`deploy.yml`), field by field, plus worked examples (single
   target, multi-target sequential rollout, Infisical secrets, staging

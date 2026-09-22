@@ -55,6 +55,7 @@ SUPPORTED_SECRETS_PROVIDERS = frozenset({"infisical"})
 DEFAULT_BRANCH = "main"
 DEFAULT_COMPOSE_FILE = "docker-compose.yml"
 _COMPOSE_SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SSH_USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._@-]*$")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 _IPV6_CHARS_RE = re.compile(r"^[0-9A-Fa-f:.]+$")
@@ -127,7 +128,14 @@ class Target:
 
     @property
     def address(self) -> str:
-        """``host:port``, with an IPv6 host bracketed (``[2001:db8::1]:22``)."""
+        """``host:port``, with an IPv6 host bracketed (``[2001:db8::1]:22``).
+
+        For display and ``ssh://`` URLs, which always show the port -- so
+        brackets are needed exactly when the host is IPv6. That's a
+        different question from :func:`wharf.ssh._known_hosts_line`'s,
+        which never shows a port at all for the default one: don't
+        collapse the two into one rule.
+        """
         host = f"[{self.host}]" if ":" in self.host else self.host
         return f"{host}:{self.port}"
 
@@ -215,6 +223,19 @@ def _absolute_path(value: object, label: str) -> str:
     return text
 
 
+def _target_name(value: object, label: str) -> str:
+    """A target's name. Restricted because it becomes a path component of
+    that target's deploy-history file (see ``remote_script.history_path``)
+    -- ``/`` or ``..`` would otherwise escape the state directory."""
+    text = _nonempty_string(value, label)
+    if not _TARGET_NAME_RE.fullmatch(text):
+        raise ConfigError(
+            f"{label} must be a target name of letters, digits, '.', '_' or '-', "
+            "not starting with '-' or '.'"
+        )
+    return text
+
+
 def _ssh_user(value: object, label: str) -> str:
     """Rejects a leading ``-`` in particular: ``user`` is the first half of
     the ``user@host`` argument handed to `ssh`, which would otherwise parse
@@ -281,7 +302,8 @@ def _string_list(value: object, label: str) -> tuple[str, ...]:
     return tuple(_nonempty_string(item, f"{label}[{i}]") for i, item in enumerate(value))
 
 
-def _compose_service_name(value: object, label: str) -> str:
+def compose_service_name(value: object, label: str) -> str:
+    """Public because the CLI validates `wharf logs SERVICE...` with it too."""
     text = _nonempty_string(value, label)
     if not _COMPOSE_SERVICE_NAME_RE.fullmatch(text):
         raise ConfigError(
@@ -297,11 +319,11 @@ def _pre_up_step(value: object, index: int, label: str) -> PreUpStep:
     `paths` for just this command."""
     item_label = f"{label}[{index}]"
     if isinstance(value, str):
-        return PreUpStep(service=_compose_service_name(value, item_label))
+        return PreUpStep(service=compose_service_name(value, item_label))
     _exact_keys(value, {"service"}, optional=frozenset({"paths"}), label=item_label)
     assert isinstance(value, dict)
     return PreUpStep(
-        service=_compose_service_name(value["service"], f"{item_label}.service"),
+        service=compose_service_name(value["service"], f"{item_label}.service"),
         paths=_string_list(value["paths"], f"{item_label}.paths") if "paths" in value else None,
     )
 
@@ -353,7 +375,7 @@ def _load_target(value: object, index: int, *, secrets_configured: bool) -> Targ
                 )
 
     return Target(
-        name=_nonempty_string(value["name"], f"{label}.name"),
+        name=_target_name(value["name"], f"{label}.name"),
         remote_dir=_absolute_path(value["remote_dir"], f"{label}.remote_dir"),
         host=_host(value["host"], f"{label}.host"),
         port=_port(value["port"], f"{label}.port"),
