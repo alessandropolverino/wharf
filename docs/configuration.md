@@ -29,12 +29,15 @@ compose_file: docker-compose.prod.yml   # optional, default "docker-compose.yml"
                                          # may override it.
 
 ensure_branch: main                     # optional, no default (unset = no check).
-                                         # Every command refuses to run
-                                         # unless the local checkout is
-                                         # currently on this branch --
-                                         # a guard against e.g. running
-                                         # deploy.yml from a feature
-                                         # branch by accident.
+                                         # deploy/down/reload/rollback refuse
+                                         # to run unless the local checkout
+                                         # is currently on this branch -- a
+                                         # guard against e.g. running
+                                         # deploy.yml from a feature branch
+                                         # by accident. status/logs/history
+                                         # ignore it: they never change a
+                                         # target, so there's nothing to
+                                         # guard against.
 
 secrets:                                # optional. Omit entirely if no
                                          # target in this file uses secrets.

@@ -86,6 +86,43 @@ def test_rollback_target_explains_why_it_cannot():
         rollback_target(_records(V1, V1))
 
 
+def test_history_for_rollback_grows_the_limit_until_enough_distinct_revisions(monkeypatch):
+    # One old deploy (V1), then the same revision (V2) redeployed 25 times in a
+    # row -- the initial bounded window (20) sees only V2, not enough to
+    # resolve a 1-step rollback, so the limit must grow until V1 is in view too.
+    full = _records(V1, *([V2] * 25))
+    limits_tried = []
+
+    def fake_read_history(target, auth, remote_repo, limit):
+        limits_tried.append(limit)
+        return full[-limit:]
+
+    monkeypatch.setattr(operations, "_read_history", fake_read_history)
+
+    records = operations._history_for_rollback(target=None, auth=None, remote_repo="x", steps=1)
+
+    assert limits_tried == [20, 80]  # 20 wasn't enough, 80 covers the whole 26-entry history
+    assert {record.revision for record in records} == {V1, V2}
+
+
+def test_history_for_rollback_reads_the_whole_history_at_most_once_if_that_is_not_enough(monkeypatch):
+    # Every entry is the same revision: no number of distinct steps back
+    # exists, so growing the limit past the actual history size must stop.
+    full = _records(*([V1] * 5))
+    limits_tried = []
+
+    def fake_read_history(target, auth, remote_repo, limit):
+        limits_tried.append(limit)
+        return full[-limit:]
+
+    monkeypatch.setattr(operations, "_read_history", fake_read_history)
+
+    records = operations._history_for_rollback(target=None, auth=None, remote_repo="x", steps=1)
+
+    assert limits_tried == [20]  # the fake already returned everything there is
+    assert len(records) == 5
+
+
 # --- orchestration, with SSH faked out ---
 
 @pytest.fixture
@@ -170,7 +207,7 @@ def test_rollback_dry_run_reads_history_but_deploys_nothing(write_config, remote
     assert remote["run"] == [] and remote["health"] == []
     out = capsys.readouterr().out
     assert out.startswith("==> [dry run] Rolling back app (203.0.113.10:22)\n")
-    assert f"Would run on deploy@203.0.113.10 (port 22): REVISION={V1} bash -l -s <<'WHARF_SCRIPT'" in out
+    assert f"Would run on deploy@203.0.113.10:22: REVISION={V1} bash -l -s <<'WHARF_SCRIPT'" in out
     assert out.endswith("WHARF_SCRIPT\nWould then poll https://app.example.com/health until it responds\n")
 
 

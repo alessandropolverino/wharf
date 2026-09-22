@@ -23,7 +23,11 @@ the schema.
   `port`, `user`, `host_key`, `order`, plus optional `healthcheck`,
   `compose_file`, `paths`, `pre_up`.
   - `address` — `host:port`, with an IPv6 host bracketed
-    (`[2001:db8::1]:22`); used for progress output and the push URL.
+    (`[2001:db8::1]:22`); used for progress output and the push URL. A
+    different rule from `ssh.py`'s known-hosts line, which brackets on
+    a non-default *port* instead (any host type) and drops the port
+    entirely for the default one — the two answer different questions
+    and aren't meant to share one bracketing rule (see `ssh.md`).
   - `uses_secrets` — true if the target's own `up` (via `paths`) or any
     `pre_up` step injects secrets.
 - **`SecretsDefaults`** — shared Infisical location, defined once per

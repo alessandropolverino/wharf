@@ -122,6 +122,14 @@ class SessionAuth:
 
 
 def _known_hosts_line(target: Target) -> str:
+    """The ``known_hosts`` entry for ``target``.
+
+    Brackets go around the whole ``host:port`` -- OpenSSH's own
+    convention for a non-default port, for any host type -- not just
+    around an IPv6 host as :attr:`wharf.config.Target.address` does: this
+    line has no port at all for the default one, so the two functions
+    answer different questions and shouldn't be merged into one rule.
+    """
     host = target.host if target.port == 22 else f"[{target.host}]:{target.port}"
     return f"{host} {target.host_key}\n"
 

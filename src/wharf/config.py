@@ -128,7 +128,14 @@ class Target:
 
     @property
     def address(self) -> str:
-        """``host:port``, with an IPv6 host bracketed (``[2001:db8::1]:22``)."""
+        """``host:port``, with an IPv6 host bracketed (``[2001:db8::1]:22``).
+
+        For display and ``ssh://`` URLs, which always show the port -- so
+        brackets are needed exactly when the host is IPv6. That's a
+        different question from :func:`wharf.ssh._known_hosts_line`'s,
+        which never shows a port at all for the default one: don't
+        collapse the two into one rule.
+        """
         host = f"[{self.host}]" if ":" in self.host else self.host
         return f"{host}:{self.port}"
 

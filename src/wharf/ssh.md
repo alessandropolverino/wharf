@@ -49,6 +49,13 @@ committed in the config. Combined with `StrictHostKeyChecking=yes`, an
 unrecognized or mismatched host key hard-fails the connection instead of
 prompting or silently trusting it.
 
+The line's `host` is bracketed by `_known_hosts_line` on a non-default
+*port*, for any host type — OpenSSH's own convention — and carries no
+port at all for the default one. That's a different rule from
+`config.py`'s `Target.address` (bracket exactly when the host is IPv6,
+always showing the port): the two format different things and
+deliberately don't share one bracketing rule.
+
 Each pinned file is removed at process exit (via `atexit`, like the CI
 key file) rather than right after use: `GIT_SSH_COMMAND` only carries
 the path, and git reads the file later, from its own `ssh` child.

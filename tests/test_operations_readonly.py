@@ -77,3 +77,32 @@ def test_logs_follow_refuses_more_than_one_target(write_config, remote):
         operations.logs(config, repo="myapp", follow=True)
 
     assert remote["run"] == []
+
+
+def test_status_resolves_auth_once_for_all_targets(write_config, monkeypatch):
+    # Session auth doesn't vary per target; in CI mode, resolving it again
+    # for each one would write the deploy key out to a fresh temp file
+    # every time for no reason.
+    config = load_config(write_config(TWO_TARGETS))
+    resolves = []
+    monkeypatch.setattr(
+        SessionAuth, "resolve",
+        staticmethod(lambda *, force_ci=None, identity=None: resolves.append(1) or SessionAuth(batch=True)),
+    )
+    monkeypatch.setattr(operations, "run_remote_script", lambda *a, **k: None)
+
+    operations.status(config, repo="myapp")
+
+    assert len(resolves) == 1
+
+
+def test_status_logs_history_ignore_ensure_branch(write_config, remote, monkeypatch):
+    # Unlike deploy/down/reload/rollback, these three never change a
+    # target, so there's nothing an ensure_branch mismatch would protect.
+    config = load_config(write_config(CONFIG_TEXT + "ensure_branch: main\n"))
+    monkeypatch.setattr(operations, "infer_current_branch", lambda cwd=None: "feature-x")
+    monkeypatch.setattr(operations, "capture_remote_script", lambda *a, **k: "")
+
+    operations.status(config, repo="myapp")
+    operations.logs(config, repo="myapp")
+    operations.history(config, repo="myapp")

@@ -88,11 +88,15 @@ traceback. `_load()` also checks `--only` against the config's targets
 right away, so a typo'd target name is reported the same way before
 anything runs — in particular before `setup`/`rotate` generate a key.
 
-`_run_operation` (used for `deploy`/`down`/`reload`) catches the two
+`_run_operation` (used for all seven `operations` actions — `deploy`,
+`down`, `reload`, `status`, `logs`, `history`, `rollback`) catches the
 ways an `operations` call can fail:
 
 - **`BranchMismatchError`** (config's `ensure_branch` doesn't match the
-  local checkout) → exit 2.
+  local checkout; not raised by `status`/`logs`/`history`, which don't
+  check it) → exit 2.
+- **`InvalidRevisionError`** (`deploy --revision` isn't a hex object
+  name) → exit 2.
 - **`OperationError`** (a target failed) → its message is printed, and
   if the underlying cause was a `RemoteCommandError`, the **remote
   command's own exit code** is propagated (so a failed `docker compose
