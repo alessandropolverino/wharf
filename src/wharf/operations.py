@@ -55,6 +55,31 @@ class BranchMismatchError(RuntimeError):
         )
 
 
+class InvalidRevisionError(ValueError):
+    """Raised when a ``--revision`` isn't a hex object name."""
+
+    def __init__(self, revision: str):
+        super().__init__(
+            f"revision must be a hex commit SHA, not {revision!r} -- a value git could "
+            "read as an option (e.g. one starting with '-') must never reach `git checkout`"
+        )
+
+
+_REVISION_RE = re.compile(r"[0-9a-f]+")
+
+
+def _check_revision(revision: str) -> None:
+    """Rejects anything but a hex object name, before it reaches `git checkout`.
+
+    Mirrors the hex-only check :func:`wharf.remote_script.render_history`
+    already applies to revisions read back from the deploy history: a
+    value like ``--upload-pack=...`` is read by git as an *option*, not a
+    revision, when it's the sole argument after ``checkout -f``.
+    """
+    if not _REVISION_RE.fullmatch(revision):
+        raise InvalidRevisionError(revision)
+
+
 def infer_current_branch(cwd: Path | None = None) -> str:
     """The current checkout's branch name, for ``ensure_branch`` checks."""
     result = subprocess.run(
@@ -147,6 +172,7 @@ def deploy(
     With ``dry_run``, print each target's push and deploy script instead:
     nothing is connected to, so no credentials are needed either.
     """
+    _check_revision(revision)
     _check_branch(config)
     for target in config.select_targets(only):
         print(_header("Deploying", target, dry_run))

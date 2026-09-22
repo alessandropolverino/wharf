@@ -46,6 +46,14 @@ def test_deploy_dry_run_shows_push_script_and_healthcheck(config, capsys):
     assert lines[-2:] == ["WHARF_SCRIPT", "Would then poll https://app.example.com/health until it responds"]
 
 
+def test_deploy_rejects_a_revision_that_is_really_a_git_option(config):
+    # A forged --revision like --upload-pack=... would otherwise reach the
+    # remote `git checkout -f "$REVISION"` as an *option*, not a revision --
+    # the same class of bug the deploy history's own hex check guards against.
+    with pytest.raises(operations.InvalidRevisionError):
+        operations.deploy(config, repo="myapp", revision="--upload-pack=/tmp/evil", dry_run=True)
+
+
 def test_down_dry_run_shows_script(config, capsys):
     operations.down(config, repo="myapp", volumes=True, dry_run=True)
 

@@ -49,6 +49,26 @@ _TRUST_CHECK = """wharf_untrusted() {
     || { echo "$path: cannot check its owner"; return; }
   [ "$owner" = "$(id -u)" ] || { echo "$path is owned by uid $owner, not by the deploy user (uid $(id -u))"; return; }
   (( (8#$mode & 0022) == 0 )) || { echo "$path is mode $mode -- writable by group or other"; return; }
+}
+# Checks each path in turn, stopping at the first one that fails -- used
+# for a history file together with its directory (a writable directory
+# lets its owner replace the file between one deploy/read and the next).
+# `stat` (unlike a plain redirect) does not follow a symlink, so a path
+# planted as a symlink is judged by the symlink's own owner/mode, not
+# the target's -- an attacker's symlink is caught the same as their
+# regular file would be. A path that doesn't exist yet (and isn't even
+# a dangling symlink) is skipped rather than treated as untrusted: it
+# has nothing on it yet for anyone to have forged.
+wharf_untrusted_any() {
+  local path result
+  for path in "$@"; do
+    [ -e "$path" ] || [ -L "$path" ] || continue
+    result=$(wharf_untrusted "$path")
+    if [ -n "$result" ]; then
+      echo "$result"
+      return
+    fi
+  done
 }"""
 
 
@@ -188,6 +208,12 @@ def render_up(
     record is created under ``umask 077`` and left mode 600, so only the
     deploy user can write it; failing to record it warns rather than
     failing a deploy whose services are already up.
+
+    Before appending, the directory and (if one is already there) the
+    file are put through the same trust check the read side uses: `>>`
+    follows a symlink, so without this a pre-planted one in a directory
+    that isn't exclusively the deploy user's could redirect the append
+    to any file that user can write.
     """
     pre_up_commands = [
         (
@@ -209,6 +235,7 @@ compose_file={shlex.quote(compose_file)}
 lock_file="$remote_dir/{_LOCK_FILE_NAME}"
 history_file={shlex.quote(history_file)}
 history_dir=$(dirname "$history_file")
+{_TRUST_CHECK}
 mkdir -p "$remote_dir"
 
 (
@@ -227,8 +254,15 @@ mkdir -p "$remote_dir"
   cd "$remote_dir"
 {commands_block}
   echo "Services started"
-  if (umask 077; mkdir -p "$history_dir") \\
-    && printf '%s %s %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$deployed_revision" {shlex.quote(kind)} >> "$history_file"; then
+  history_problem=""
+  if ! (umask 077; mkdir -p "$history_dir") 2>/dev/null; then
+    history_problem="could not create $history_dir"
+  else
+    history_problem=$(wharf_untrusted_any "$history_dir" "$history_file")
+  fi
+  if [ -n "$history_problem" ]; then
+    echo "WARNING: not recording this deploy in $history_file -- $history_problem (rollback will not see it)" >&2
+  elif printf '%s %s %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$deployed_revision" {shlex.quote(kind)} >> "$history_file"; then
     chmod 600 "$history_file" 2>/dev/null || true
   else
     echo "WARNING: could not record this deploy in $history_file (rollback will not see it)" >&2
@@ -314,9 +348,10 @@ def render_status(
     lock file -- or anything else. A target that was never deployed is
     reported as such, not treated as an error.
 
-    The last deploy is reported from ``history_file`` only when that file
-    passes the same trust check `wharf history` uses; otherwise the line
-    says so instead of quoting a record anything could have written.
+    The last deploy is reported from ``history_file`` only when it and its
+    directory pass the same trust check `wharf history` uses; otherwise
+    the line says so instead of quoting a record anything could have
+    written.
 
     `docker compose ps` gets the same secrets wrapping as `up` when the
     target declares ``paths``: compose still interpolates the file for
@@ -330,6 +365,7 @@ remote_dir={shlex.quote(remote_dir)}
 compose_file={shlex.quote(compose_file)}
 lock_file="$remote_dir/{_LOCK_FILE_NAME}"
 history_file={shlex.quote(history_file)}
+history_dir=$(dirname "$history_file")
 {_TRUST_CHECK}
 
 if [ ! -d "$remote_dir" ]; then
@@ -342,7 +378,7 @@ else
   echo "revision: nothing checked out"
 fi
 if [ -s "$history_file" ]; then
-  untrusted=$(wharf_untrusted "$history_file")
+  untrusted=$(wharf_untrusted_any "$history_dir" "$history_file")
   if [ -n "$untrusted" ]; then
     echo "last deploy: not trusted -- $untrusted"
   else
@@ -433,14 +469,12 @@ history_file={shlex.quote(history_file)}
 history_dir=$(dirname "$history_file")
 {_TRUST_CHECK}
 [ -f "$history_file" ] || exit 0
-for path in "$history_dir" "$history_file"; do
-  untrusted=$(wharf_untrusted "$path")
-  if [ -n "$untrusted" ]; then
-    echo "refusing to read the deploy history: $untrusted" >&2
-    echo "wharf believes this file only if the deploy user alone can write it" >&2
-    exit 1
-  fi
-done
+untrusted=$(wharf_untrusted_any "$history_dir" "$history_file")
+if [ -n "$untrusted" ]; then
+  echo "refusing to read the deploy history: $untrusted" >&2
+  echo "wharf believes this file only if the deploy user alone can write it" >&2
+  exit 1
+fi
 {source} "$history_file" | while read -r timestamp revision kind _; do
   case "$revision" in ''|*[!0-9a-f]*) continue;; esac
   [ ${{#revision}} -ge 40 ] || continue

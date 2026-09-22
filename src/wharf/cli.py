@@ -31,7 +31,7 @@ import yaml
 from . import __version__, operations, rotate as rotate_mod, setup as setup_mod
 from .config import Config, ConfigError, compose_service_name, load_config
 from .identity import InvalidIdentityError, list_identities, validate_identity_name
-from .operations import BranchMismatchError, OperationError
+from .operations import BranchMismatchError, InvalidRevisionError, OperationError
 from .ssh import RemoteCommandError, is_ci
 from .update_check import check_for_update
 
@@ -228,7 +228,7 @@ def _resolve_repo(args: argparse.Namespace) -> str:
 def _run_operation(fn, *args, **kwargs) -> int:
     try:
         fn(*args, **kwargs)
-    except BranchMismatchError as exc:
+    except (BranchMismatchError, InvalidRevisionError) as exc:
         print(f"wharf: {exc}", file=sys.stderr)
         return 2
     except OperationError as exc:

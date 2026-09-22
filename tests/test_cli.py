@@ -195,6 +195,21 @@ def test_deploy_dry_run_prints_plan_without_connecting_or_credentials(monkeypatc
     assert out.rstrip().endswith("Would then poll https://app.example.com/health until it responds")
 
 
+def test_deploy_reports_a_non_hex_revision_as_a_clean_error(monkeypatch, capsys, write_config):
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.delenv("DEPLOY_SSH_KEY", raising=False)
+    config = write_config(CONFIG_TEXT)
+    # The `=` form: a caller building argv from a single templated string
+    # (e.g. `f"--revision={revision}"` in a CI wrapper) hands argparse one
+    # token, so a dash-prefixed value isn't rejected as a bad flag first.
+
+    exit_code = main(["deploy", str(config), "--dry-run", "--repo", "myapp", "--revision=--upload-pack=/tmp/evil"])
+
+    err = capsys.readouterr().err
+    assert exit_code == 2
+    assert "revision must be a hex commit SHA" in err
+
+
 def test_status_history_rollback_parse():
     assert build_parser().parse_args(["status", "deploy.yml", "--only", "app"]).command == "status"
     history = build_parser().parse_args(["history", "deploy.yml", "--limit", "5"])

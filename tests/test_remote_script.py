@@ -443,7 +443,31 @@ def test_up_script_records_nothing_when_up_fails(tmp_path, bare_repo, monkeypatc
     with pytest.raises(subprocess.CalledProcessError):
         _run_up(bare, remote_dir, v1, compose_file="compose.other.yml")
 
-    assert not (remote_dir / ".wharf-history").exists()
+    assert not Path(history_path(str(bare), "app")).exists()
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+def test_up_script_warns_instead_of_recording_into_a_writable_state_directory(tmp_path, fake_docker, bare_repo):
+    bare, (v1, _) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    history_file = Path(history_path(str(bare), "app"))
+    history_file.parent.mkdir(parents=True)
+    history_file.parent.chmod(0o777)  # e.g. left behind by something else -- anyone could swap in a symlink
+
+    script = render_up(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="compose.other.yml",
+        history_file=str(history_file), secrets=None, paths=None,
+    )
+    result = subprocess.run(
+        ["bash", "-s"], input=script, text=True, capture_output=True,
+        env={**os.environ, "REVISION": v1},
+    )
+
+    assert result.returncode == 0  # the deploy itself still succeeds
+    assert (remote_dir / "app.txt").read_text() == "v1\n"
+    assert not history_file.exists()  # nothing was appended into the untrusted directory
+    assert "not recording this deploy" in result.stderr
+    assert "writable by group or other" in result.stderr
 
 
 def test_status_script_reports_a_never_deployed_target(tmp_path, bare_repo):
@@ -629,6 +653,25 @@ def test_status_script_says_so_rather_than_quoting_an_untrusted_history(tmp_path
     remote_dir.mkdir(parents=True)
     history = _write_history(bare, f"2026-09-17T10:00:00Z {v1} deploy\n")
     history.chmod(0o666)
+    script = render_status(
+        remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml",
+        history_file=str(history), secrets=None, paths=None,
+    )
+
+    result = _run(script)
+
+    assert result.returncode == 0  # the rest of the status still reports
+    last_deploy = next(line for line in result.stdout.splitlines() if line.startswith("last deploy:"))
+    assert "not trusted" in last_deploy
+    assert v1[:7] not in last_deploy
+
+
+def test_status_script_says_so_when_the_state_directory_is_writable(tmp_path, fake_docker, bare_repo):
+    bare, (v1, _) = bare_repo
+    remote_dir = tmp_path / "deploys" / "app"
+    remote_dir.mkdir(parents=True)
+    history = _write_history(bare, f"2026-09-17T10:00:00Z {v1} deploy\n")
+    history.parent.chmod(0o777)  # anyone could swap the file out -- the file itself is still 0600
     script = render_status(
         remote_repo=str(bare), remote_dir=str(remote_dir), compose_file="docker-compose.yml",
         history_file=str(history), secrets=None, paths=None,
