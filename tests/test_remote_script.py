@@ -683,3 +683,46 @@ def test_status_script_says_so_when_the_state_directory_is_writable(tmp_path, fa
     last_deploy = next(line for line in result.stdout.splitlines() if line.startswith("last deploy:"))
     assert "not trusted" in last_deploy
     assert v1[:7] not in last_deploy
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="needs util-linux flock (Linux)")
+@pytest.mark.parametrize("legacy", [False, True], ids=["per-target-index", "seeded-from-history"])
+def test_up_removes_deleted_files_from_every_target_sharing_a_bare_repo(tmp_path, fake_docker, legacy):
+    src = tmp_path / "src"
+    src.mkdir()
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(src), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (src / "keep.txt").write_text("k\n")
+    (src / "old.txt").write_text("o\n")
+    git("add", ".")
+    git("commit", "-q", "-m", "v1")
+    v1 = git("rev-parse", "HEAD")
+    git("rm", "-q", "old.txt")
+    git("commit", "-q", "-m", "v2")
+    bare = tmp_path / "app.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    git("push", "-q", str(bare), "HEAD:refs/heads/main")
+
+    dirs = {name: tmp_path / "deploys" / name for name in ("core", "dashboard")}
+
+    def up(name, revision):
+        _run_up(
+            bare, dirs[name], revision, compose_file="compose.other.yml",
+            history_file=history_path(str(bare), name),
+        )
+
+    for name in dirs:
+        up(name, v1)
+        if legacy:  # as left by a wharf from before per-target indexes
+            Path(history_path(str(bare), name)[: -len(".history")] + ".index").unlink()
+    for name in dirs:
+        up(name, "main")
+
+    for name, d in dirs.items():
+        assert (d / "keep.txt").exists(), name
+        assert not (d / "old.txt").exists(), name
