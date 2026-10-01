@@ -247,7 +247,32 @@ mkdir -p "$remote_dir"
       docker compose -f "$compose_file" images -q 2>/dev/null | sort -u || true)
   fi
 
+  # Each target keeps its own index (beside its history), so checkout -f
+  # diffs against what *this* directory last got. The bare repo's single
+  # shared index would otherwise already match the new revision once the
+  # first target on the host had deployed, and later targets would keep
+  # every file deleted from the repo.
+  index_problem=$(wharf_untrusted_any "$history_dir")
+  if [ -z "$index_problem" ] && (umask 077; mkdir -p "$history_dir") 2>/dev/null; then
+    export GIT_INDEX_FILE="${{history_file%.history}}.index"
+    if [ ! -e "$GIT_INDEX_FILE" ] && [ -f "$history_file" ]; then
+      # First deploy with a per-target index: start from the revision this
+      # target last deployed, else nothing would be seen as deleted.
+      seed=$(awk 'END {{print $2}}' "$history_file")
+      seed_problem=$(wharf_untrusted_any "$history_file")
+      if [ -z "$seed_problem" ] && [[ "$seed" =~ ^[0-9a-f]{{40,64}}$ ]] \
+          && git --git-dir="$remote_repo" cat-file -e "$seed^{{commit}}" 2>/dev/null; then
+        git --git-dir="$remote_repo" read-tree "$seed"
+      else
+        echo "WARNING: cannot seed this target's git index from $history_file -- files deleted from the repo may stay in $remote_dir this once" >&2
+      fi
+    fi
+  else
+    echo "WARNING: not using a per-target git index (${{index_problem:-could not create $history_dir}}) -- files deleted from the repo may stay in $remote_dir" >&2
+  fi
+
   git -c advice.detachedHead=false --work-tree="$remote_dir" --git-dir="$remote_repo" checkout -f "$REVISION"
+  unset GIT_INDEX_FILE
   deployed_revision=$(git --git-dir="$remote_repo" rev-parse HEAD)
   echo "Code deployed to $remote_dir (revision ${{deployed_revision:0:7}})"
 

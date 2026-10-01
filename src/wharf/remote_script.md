@@ -25,7 +25,15 @@ In order:
 3. `git checkout -f $REVISION` into `remote_dir` from the bare repo
    pushed by [`git_ops.md`](git_ops.md). The checkout is always a
    detached HEAD, so it runs with `-c advice.detachedHead=false` to keep
-   git's multi-paragraph advice out of every deploy log.
+   git's multi-paragraph advice out of every deploy log. The checkout
+   uses a **per-target index** (`GIT_INDEX_FILE`, `<target>.index` beside
+   the history file). The bare repo's own index is shared by every target
+   on the host, so once the first target had deployed it already matched
+   the new revision and `checkout -f` deleted nothing from the others --
+   files removed from the repo stayed in every later target's directory.
+   A target with no index yet is seeded (`git read-tree`) from the last
+   revision in its history; if that isn't possible the deploy warns and
+   goes ahead, so stale files may remain that once.
 4. Run each `pre_up` entry: `docker compose run --rm -T --build <service>
    </dev/null`.
 5. `docker compose up -d --build --remove-orphans`.
